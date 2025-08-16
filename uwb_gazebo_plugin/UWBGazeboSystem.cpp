@@ -1,6 +1,6 @@
 #include "UWBGazeboSystem.hpp"
 
-#include <gz/msgs/double_v.pb.h>
+#include <gz/msgs/double.pb.h>
 #include <gz/sim/components/Model.hh>
 #include <gz/sim/components/Link.hh>
 #include <gz/sim/components/Pose.hh>
@@ -93,10 +93,25 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 
 		for (const auto &[anchorName, anchorEntity] : anchors)
 		{
+
+			//With a small probability, skip publishing
+			if (dropout_flag_(rng_)) {
+				continue;
+			}
+
 			auto anchorPose = computeWorldPose(anchorEntity, ecm);
 
 			double dist = tagPose.Pos().Distance(anchorPose.Pos()) * 100.0; // Convert to cm
 			dist += noise_dist_(rng_);  // Add zero-mean Gaussian noise
+
+			// With small probability, inject an outlier with exp. bias
+			if (outlier_flag_(rng_)) {
+				double bias_m = outlier_bias_m_(rng_);
+				dist += bias_m * 100.0;
+			}
+
+			// Keep distance physically valid
+			if (dist < 0.0) dist = 0.0;
 
 			// Extract numeric IDs from names (assumes uwb_tag_1, uwb_anchor_2, etc.)
 			std::string tagId = tagName.substr(tagName.find_last_of('_') + 1);
@@ -106,11 +121,11 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			// Create publisher if not already existing
 			if (this->publishers_.find(topic) == this->publishers_.end())
 			{
-				this->publishers_[topic] = this->node_.Advertise<gz::msgs::Double_V>(topic);
+				this->publishers_[topic] = this->node_.Advertise<gz::msgs::Double>(topic);
 			}
 
-			gz::msgs::Double_V msg;
-			msg.add_data(dist);
+			gz::msgs::Double msg;
+			msg.set_data(dist);
 			this->publishers_[topic].Publish(msg);
 		}
 	}
