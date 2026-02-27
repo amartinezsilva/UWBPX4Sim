@@ -554,7 +554,7 @@
 
 
 		<link name="uwb_anchor_1">
-			<pose>-0.32 0.3 0.875 0 0 0</pose> <!-- Tag position relative to base_link -->
+			<pose>-0.32 0.3 0.875 0 0 0</pose> <!-- Anchor position relative to base_link -->
 			<inertial>
 				<mass>0.0001</mass> <!-- Very small mass -->
 				<inertia>
@@ -566,110 +566,207 @@
 					<iyz>0</iyz>
 				</inertia>
 			</inertial>
-
-			<visual name="uwb_anchor_1_vis">
+			<visual name="uwb_anchor_1_mesh_vis">
+				<pose>0 0 0 0 0 0</pose>
 				<geometry>
-					<sphere>
-					<radius>0.02</radius>
-					</sphere>
+					<mesh>
+						<uri>model://r1_rover/meshes/uwb_anchor_eliko.stl</uri>
+						<scale>1 1 1</scale>
+					</mesh>
 				</geometry>
 				<material>
-					<ambient>0 0 1 1</ambient> <!-- blue -->
-					<diffuse>0 0 1 1</diffuse>
+					<ambient>0.92 0.92 0.92 1</ambient>
+					<diffuse>0.92 0.92 0.92 1</diffuse>
 				</material>
 			</visual>
-    		</link>
-
-		<link name="uwb_anchor_2">
-			<pose>0.32 -0.3 0.875 0 0 0</pose>
-			<inertial>
-				<mass>0.0001</mass> <!-- Very small mass -->
-				<inertia>
-					<ixx>1e-6</ixx>
-					<iyy>1e-6</iyy>
-					<izz>1e-6</izz>
-					<ixy>0</ixy>
-					<ixz>0</ixz>
-					<iyz>0</iyz>
-				</inertia>
-			</inertial>
-			<visual name="uwb_anchor_2_vis">
+			<visual name="uwb_anchor_1_bar_vis">
+				<pose>0.16 -0.15 -0.4375 2.8113 0.333059 1.57928</pose>
 				<geometry>
-					<sphere>
-					<radius>0.02</radius>
-					</sphere>
+					<cylinder>
+						<radius>0.004</radius>
+						<length>0.978788</length>
+					</cylinder>
 				</geometry>
 				<material>
-					<ambient>0 0 1 1</ambient> <!-- blue -->
-					<diffuse>0 0 1 1</diffuse>
+					<ambient>0.28 0.28 0.30 1</ambient>
+					<diffuse>0.28 0.28 0.30 1</diffuse>
 				</material>
 			</visual>
-		</link>
-
-		<link name="uwb_anchor_3">
-			<pose>0.32 0.3 0.33 0 0 0</pose> <!-- Tag position relative to base_link -->
-			<inertial>
-				<mass>0.0001</mass> <!-- Very small mass -->
-				<inertia>
-					<ixx>1e-6</ixx>
-					<iyy>1e-6</iyy>
-					<izz>1e-6</izz>
-					<ixy>0</ixy>
-					<ixz>0</ixz>
-					<iyz>0</iyz>
-				</inertia>
-			</inertial>
-			<visual name="uwb_anchor_3_vis">
+			<collision name="uwb_anchor_1_collision">
+				<pose>0 0 0 0 0 0</pose>
 				<geometry>
-					<sphere>
-					<radius>0.02</radius>
-					</sphere>
+					<box>
+						<size>0.062 0.046 0.04</size>
+					</box>
 				</geometry>
-				<material>
-					<ambient>0 0 1 1</ambient> <!-- blue -->
-					<diffuse>0 0 1 1</diffuse>
-				</material>
-			</visual>
-    		</link>
-
-		<link name="uwb_anchor_4">
-			<pose>-0.32 -0.3 0.33 0 0 0</pose>
-			<inertial>
-				<mass>0.0001</mass> <!-- Very small mass -->
-				<inertia>
-					<ixx>1e-6</ixx>
-					<iyy>1e-6</iyy>
-					<izz>1e-6</izz>
-					<ixy>0</ixy>
-					<ixz>0</ixz>
-					<iyz>0</iyz>
-				</inertia>
-			</inertial>
-			<visual name="uwb_anchor_4_vis">
-				<geometry>
-					<sphere>
-					<radius>0.02</radius>
-					</sphere>
-				</geometry>
-				<material>
-					<ambient>0 0 1 1</ambient> <!-- blue -->
-					<diffuse>0 0 1 1</diffuse>
-				</material>
-			</visual>
+			</collision>
 		</link>
 
 		<joint name="uwb_anchor_1_joint" type="fixed">
 			<parent>base_link</parent>
 			<child>uwb_anchor_1</child>
 		</joint>
+
+
+		<link name="uwb_anchor_2">
+			<pose>0.32 -0.3 0.875 0 0 0</pose> <!-- Anchor position relative to base_link -->
+			<inertial>
+				<mass>0.0001</mass> <!-- Very small mass -->
+				<inertia>
+					<ixx>1e-6</ixx>
+					<iyy>1e-6</iyy>
+					<izz>1e-6</izz>
+					<ixy>0</ixy>
+					<ixz>0</ixz>
+					<iyz>0</iyz>
+				</inertia>
+			</inertial>
+			<visual name="uwb_anchor_2_mesh_vis">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<mesh>
+						<uri>model://r1_rover/meshes/uwb_anchor_eliko.stl</uri>
+						<scale>1 1 1</scale>
+					</mesh>
+				</geometry>
+				<material>
+					<ambient>0.92 0.92 0.92 1</ambient>
+					<diffuse>0.92 0.92 0.92 1</diffuse>
+				</material>
+			</visual>
+			<visual name="uwb_anchor_2_bar_vis">
+				<pose>-0.16 0.15 -0.4375 -2.8113 -0.333059 1.57928</pose>
+				<geometry>
+					<cylinder>
+						<radius>0.004</radius>
+						<length>0.978788</length>
+					</cylinder>
+				</geometry>
+				<material>
+					<ambient>0.28 0.28 0.30 1</ambient>
+					<diffuse>0.28 0.28 0.30 1</diffuse>
+				</material>
+			</visual>
+			<collision name="uwb_anchor_2_collision">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<box>
+						<size>0.062 0.046 0.04</size>
+					</box>
+				</geometry>
+			</collision>
+		</link>
+
 		<joint name="uwb_anchor_2_joint" type="fixed">
 			<parent>base_link</parent>
 			<child>uwb_anchor_2</child>
 		</joint>
+
+
+		<link name="uwb_anchor_3">
+			<pose>0.32 0.3 0.33 0 0 0</pose> <!-- Anchor position relative to base_link -->
+			<inertial>
+				<mass>0.0001</mass> <!-- Very small mass -->
+				<inertia>
+					<ixx>1e-6</ixx>
+					<iyy>1e-6</iyy>
+					<izz>1e-6</izz>
+					<ixy>0</ixy>
+					<ixz>0</ixz>
+					<iyz>0</iyz>
+				</inertia>
+			</inertial>
+			<visual name="uwb_anchor_3_mesh_vis">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<mesh>
+						<uri>model://r1_rover/meshes/uwb_anchor_eliko.stl</uri>
+						<scale>1 1 1</scale>
+					</mesh>
+				</geometry>
+				<material>
+					<ambient>0.92 0.92 0.92 1</ambient>
+					<diffuse>0.92 0.92 0.92 1</diffuse>
+				</material>
+			</visual>
+			<visual name="uwb_anchor_3_bar_vis">
+				<pose>-0.16 -0.15 -0.165 2.40378 -0.622386 -1.38786</pose>
+				<geometry>
+					<cylinder>
+						<radius>0.004</radius>
+						<length>0.548908</length>
+					</cylinder>
+				</geometry>
+				<material>
+					<ambient>0.28 0.28 0.30 1</ambient>
+					<diffuse>0.28 0.28 0.30 1</diffuse>
+				</material>
+			</visual>
+			<collision name="uwb_anchor_3_collision">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<box>
+						<size>0.062 0.046 0.04</size>
+					</box>
+				</geometry>
+			</collision>
+		</link>
+
 		<joint name="uwb_anchor_3_joint" type="fixed">
 			<parent>base_link</parent>
 			<child>uwb_anchor_3</child>
 		</joint>
+
+
+		<link name="uwb_anchor_4">
+			<pose>-0.32 -0.3 0.33 0 0 0</pose> <!-- Anchor position relative to base_link -->
+			<inertial>
+				<mass>0.0001</mass> <!-- Very small mass -->
+				<inertia>
+					<ixx>1e-6</ixx>
+					<iyy>1e-6</iyy>
+					<izz>1e-6</izz>
+					<ixy>0</ixy>
+					<ixz>0</ixz>
+					<iyz>0</iyz>
+				</inertia>
+			</inertial>
+			<visual name="uwb_anchor_4_mesh_vis">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<mesh>
+						<uri>model://r1_rover/meshes/uwb_anchor_eliko.stl</uri>
+						<scale>1 1 1</scale>
+					</mesh>
+				</geometry>
+				<material>
+					<ambient>0.92 0.92 0.92 1</ambient>
+					<diffuse>0.92 0.92 0.92 1</diffuse>
+				</material>
+			</visual>
+			<visual name="uwb_anchor_4_bar_vis">
+				<pose>0.16 0.15 -0.165 -2.40378 0.622386 -1.38786</pose>
+				<geometry>
+					<cylinder>
+						<radius>0.004</radius>
+						<length>0.548908</length>
+					</cylinder>
+				</geometry>
+				<material>
+					<ambient>0.28 0.28 0.30 1</ambient>
+					<diffuse>0.28 0.28 0.30 1</diffuse>
+				</material>
+			</visual>
+			<collision name="uwb_anchor_4_collision">
+				<pose>0 0 0 0 0 0</pose>
+				<geometry>
+					<box>
+						<size>0.062 0.046 0.04</size>
+					</box>
+				</geometry>
+			</collision>
+		</link>
+
 		<joint name="uwb_anchor_4_joint" type="fixed">
 			<parent>base_link</parent>
 			<child>uwb_anchor_4</child>

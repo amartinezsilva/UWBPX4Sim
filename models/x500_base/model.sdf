@@ -613,18 +613,40 @@
           <iyz>0</iyz>
         </inertia>
       </inertial>
-
-      <visual name="uwb_tag_1_vis">
+      <visual name="uwb_tag_1_mesh_vis">
+        <pose>0 0 0 0 0 0</pose>
         <geometry>
-          <sphere>
-            <radius>0.02</radius>
-          </sphere>
+          <mesh>
+            <uri>model://x500_base/meshes/uwb_tag_eliko.stl</uri>
+            <scale>1 1 1</scale>
+          </mesh>
         </geometry>
         <material>
-          <ambient>1 0 0 1</ambient> <!-- red -->
-          <diffuse>1 0 0 1</diffuse>
+          <ambient>0.96 0.55 0.13 1</ambient>
+          <diffuse>0.96 0.55 0.13 1</diffuse>
         </material>
       </visual>
+      <visual name="uwb_tag_1_bar_vis">
+        <pose>0.12 0.12 0.03 -1.32582 0.770244 -0.613048</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.0035</radius>
+            <length>0.344674</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.24 0.24 0.24 1</ambient>
+          <diffuse>0.24 0.24 0.24 1</diffuse>
+        </material>
+      </visual>
+      <collision name="uwb_tag_1_collision">
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.052 0.036 0.03</size>
+          </box>
+        </geometry>
+      </collision>
     </link>
 
     <joint name="uwb_tag_1_joint" type="fixed">
@@ -632,8 +654,9 @@
       <child>uwb_tag_1</child>
     </joint>
 
+
     <link name="uwb_tag_2">
-      <pose>0.24 0.24 -0.06 0 0 0</pose>
+      <pose>0.24 0.24 -0.06 0 0 0</pose> <!-- Tag position relative to base_link -->
       <inertial>
         <mass>0.0001</mass> <!-- Very small mass -->
         <inertia>
@@ -645,17 +668,40 @@
           <iyz>0</iyz>
         </inertia>
       </inertial>
-      <visual name="uwb_tag_2_vis">
+      <visual name="uwb_tag_2_mesh_vis">
+        <pose>0 0 0 0 0 0</pose>
         <geometry>
-          <sphere>
-            <radius>0.02</radius>
-          </sphere>
+          <mesh>
+            <uri>model://x500_base/meshes/uwb_tag_eliko.stl</uri>
+            <scale>1 1 1</scale>
+          </mesh>
         </geometry>
         <material>
-          <ambient>1 0 0 1</ambient> <!-- red -->
-          <diffuse>1 0 0 1</diffuse>
+          <ambient>0.96 0.55 0.13 1</ambient>
+          <diffuse>0.96 0.55 0.13 1</diffuse>
         </material>
       </visual>
+      <visual name="uwb_tag_2_bar_vis">
+        <pose>-0.12 -0.12 0.03 1.32582 -0.770244 -0.613048</pose>
+        <geometry>
+          <cylinder>
+            <radius>0.0035</radius>
+            <length>0.344674</length>
+          </cylinder>
+        </geometry>
+        <material>
+          <ambient>0.24 0.24 0.24 1</ambient>
+          <diffuse>0.24 0.24 0.24 1</diffuse>
+        </material>
+      </visual>
+      <collision name="uwb_tag_2_collision">
+        <pose>0 0 0 0 0 0</pose>
+        <geometry>
+          <box>
+            <size>0.052 0.036 0.03</size>
+          </box>
+        </geometry>
+      </collision>
     </link>
 
     <joint name="uwb_tag_2_joint" type="fixed">
