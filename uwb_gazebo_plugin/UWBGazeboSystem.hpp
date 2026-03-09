@@ -49,5 +49,10 @@ private:
   double biasMaxCm_{20.0};
   double dropoutProbability_{0.02}; // [0, 1]
   bool applyPairBias_{false};
+
+  // If true, any obstacle between tag and anchor causes measurement dropout.
+  bool enableNlosDropout_{true};
+  // Ignore intersections too close to endpoints to avoid self-hit artifacts.
+  double nlosEndpointMarginM_{0.02};
 };
 }
