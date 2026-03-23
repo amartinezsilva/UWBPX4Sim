@@ -21,6 +21,8 @@ This repository is **does not contain** a standalone ROS 2 package. It contains 
 - `uwb_bridge.yaml`: Gazebo-to-ROS bridge topics for all anchor-tag pairs
 - `uwb_layout.example.json`: example anchor / tag layout description
 
+![](images/SimDiagram.png)
+
 ## What the plugin does
 
 For each UGV anchor and UAV tag pair, the plugin publishes:
@@ -197,15 +199,3 @@ The plugin accepts the following parameters.
 | `los_stddev_end_distance_m` | LOS distance where the stddev reaches its maximum | `75.0` |
 | `nlos_dropout_thickness_extra_weight` | Extra thickness importance for dropout relative to the fixed distance baseline (`0 = equal`, `1 = twice as influential`) | `0.50` |
 | `nlos_stddev_thickness_extra_weight` | Extra thickness importance for stddev relative to the fixed distance baseline (`0 = equal`, `1 = twice as influential`) | `0.50` |
-
-## Typical submodule workflow in the parent repository
-
-The parent repository pins this repository as a submodule. To pull the latest commit from the tracked branch:
-
-```bash
-git submodule update --init --remote --merge UWBPX4Sim
-git add UWBPX4Sim .gitmodules
-git commit -m "Update UWBPX4Sim submodule"
-```
-
-The parent repo still records an exact submodule SHA, but the `branch = main` setting makes updating to the latest `main` tip straightforward.
