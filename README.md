@@ -130,7 +130,7 @@ Rules:
 The repository also includes this exact test layout as:
 
 ```text
-uwb_layout.two_vehicle_example.json
+uwb_layout.four_vehicle_example.json
 ```
 
 ## Generating simplified anchor/tag meshes
