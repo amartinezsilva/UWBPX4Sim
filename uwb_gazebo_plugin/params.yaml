@@ -1,0 +1,53 @@
+# UWBGazeboSystem plugin parameters.
+#
+# setup_simulator.sh reads this file and writes its values into the
+# <plugin name="custom::UWBGazeboSystem"> block in PX4's
+# src/modules/simulation/gz_bridge/server.config on every run, so this file
+# is the single source of truth for the plugin's tuning -- edit here, then
+# re-run setup_simulator.sh to apply. Do not rename these keys; each one maps
+# directly to an SDF parameter read by UWBGazeboSystem.cpp. See README.md
+# ("Plugin parameters") for what each one does. Values shown match the
+# plugin's own compiled-in defaults, except hard_nlos_gap_ratio (see below).
+
+# Base GZ topics for simulated / ground-truth ranges.
+topic: /uwb_gz_simulator/distances
+ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
+
+# Additive Gaussian noise mean.
+gaussian_noise_mean_cm: 0.0
+
+# Persistent per-pair bias.
+apply_pair_bias: false
+bias_min_cm: -27.0
+bias_max_cm: 20.0
+
+# NLOS-aware degradation.
+enable_nlos_dropout: true
+nlos_endpoint_margin_m: 0.02
+
+# LOS distance-based dropout curve.
+los_dropout_start_distance_m: 10.0
+los_dropout_end_distance_m: 70.0
+los_hard_dropout_distance_m: 75.0
+
+# Blocked-thickness thresholds.
+los_max_thickness_m: 0.10
+soft_nlos_max_thickness_m: 0.50
+blackout_thickness_m: 1.0
+# Compiled-in default is 0.50; kept at 0.75 here to match the currently
+# tuned/running setup (this was the value in README.md's example block).
+hard_nlos_gap_ratio: 0.75
+
+# Dropout probability bounds.
+min_dropout_probability: 0.02
+max_dropout_probability: 0.90
+
+# Noise standard-deviation curve.
+min_noise_stddev_cm: 12.0
+max_noise_stddev_cm: 50.0
+los_stddev_start_distance_m: 15.0
+los_stddev_end_distance_m: 75.0
+
+# Extra weight given to blocked thickness vs. distance.
+nlos_dropout_thickness_extra_weight: 0.50
+nlos_stddev_thickness_extra_weight: 0.50
