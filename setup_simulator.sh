@@ -566,15 +566,23 @@ if [[ -n "${PX4_DIR:-}" && -d "$PX4_DIR" ]]; then
     should_build=1
   fi
 
+  # BUILD_TESTING=OFF works around a known PX4 build failure ("Unknown CMake
+  # command link_fuzztest") that happens whenever ROS 2's ament_cmake is on
+  # the CMake search path (true for both the Docker image and any native
+  # setup with ROS 2 sourced): ament_cmake_test's own `option(BUILD_TESTING
+  # ... ON)` claims that cache variable before PX4's CMAKE_TESTING gate ever
+  # runs, silently pulling in PX4's test tree -- including its incomplete
+  # fuzztest CMake integration -- on a plain `make px4_sitl`. Passing
+  # -DBUILD_TESTING=OFF on the initial cmake invocation pre-empts that.
   if (( should_build )); then
     if (( DRY_RUN )); then
-      log_info "[DRY-RUN] (cd \"$PX4_DIR\" && make px4_sitl)"
+      log_info "[DRY-RUN] (cd \"$PX4_DIR\" && CMAKE_ARGS=\"-DBUILD_TESTING=OFF\" make px4_sitl)"
     else
-      ( cd "$PX4_DIR" && make px4_sitl )
+      ( cd "$PX4_DIR" && CMAKE_ARGS="${CMAKE_ARGS:-} -DBUILD_TESTING=OFF" make px4_sitl )
       log_ok "PX4 rebuilt"
     fi
   else
-    log_info "Skipped. Rebuild later with: cd $PX4_DIR && make px4_sitl"
+    log_info "Skipped. Rebuild later with: cd $PX4_DIR && CMAKE_ARGS=\"-DBUILD_TESTING=OFF\" make px4_sitl"
   fi
 else
   log_info "Skipping (no PX4 directory to build)."
