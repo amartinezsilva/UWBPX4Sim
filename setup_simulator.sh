@@ -4,6 +4,8 @@
 #
 # Automates the steps described in README.md section "2. Setting up the
 # plugin in PX4 SITL":
+#   0. (interactive only) Open the browser GUI (gui/app.py) to build the
+#      layout and tune plugin parameters, unless --no-gui/--layout/-y is given
 #   1. Generate per-robot models + the GZ/ROS2 bridge config from a layout YAML
 #   2. Copy the generated models into <PX4-Autopilot>/Tools/simulation/gz/models
 #   3. Copy uwb_gazebo_plugin/ into <PX4-Autopilot>/src/modules/simulation/gz_plugins
@@ -23,6 +25,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ASSUME_YES=0
 DRY_RUN=0
+NO_GUI=0
 DO_BUILD=""      # "", "yes", "no"
 SKIP_MODELS=0
 SKIP_PLUGIN=0
@@ -30,6 +33,7 @@ SKIP_ROS=0
 WORLD_ARG=""
 
 CONFIG_DIR="$SCRIPT_DIR/config"
+GUI_PORT="${UWB_GUI_PORT:-5050}"
 
 LAYOUT_FILE="${UWB_LAYOUT_FILE:-}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
@@ -144,6 +148,49 @@ select_world() {
   done
 }
 
+run_gui() {
+  # Populates LAYOUT_FILE (and, if chosen there, WORLD_ARG) via the browser
+  # GUI instead of the terminal pickers below. Returns 1 on anything short
+  # of a clean finish (missing deps, port taken, GUI closed without
+  # clicking "Continue Setup") so the caller can fall back to select_layout.
+  local gui_dir="$SCRIPT_DIR/gui" selection_file gui_pid
+
+  if [[ ! -f "$gui_dir/app.py" ]]; then
+    log_warn "Configuration GUI not found under $gui_dir; using the terminal picker instead."
+    return 1
+  fi
+  if ! python3 -c "import flask" >/dev/null 2>&1; then
+    log_warn "Python module 'flask' not available; using the terminal picker instead."
+    log_warn "(apt install python3-flask, or pip install flask, to enable the GUI)"
+    return 1
+  fi
+
+  selection_file="$(mktemp)"
+
+  echo
+  log_info "Configuration GUI: http://localhost:$GUI_PORT"
+  log_info "Open that in your browser to build a layout and tune plugin parameters,"
+  log_info "then click 'Continue Setup' there. Ctrl-C here cancels the whole setup."
+
+  python3 "$gui_dir/app.py" --uwb-root "$SCRIPT_DIR" --port "$GUI_PORT" --selection-file "$selection_file" &
+  gui_pid=$!
+  trap 'kill "$gui_pid" 2>/dev/null || true' EXIT INT TERM
+  wait "$gui_pid" || true
+  trap - EXIT INT TERM
+
+  if [[ ! -s "$selection_file" ]]; then
+    log_warn "GUI exited without finishing; using the terminal picker instead."
+    rm -f "$selection_file"
+    return 1
+  fi
+
+  # shellcheck disable=SC1090
+  source "$selection_file"
+  rm -f "$selection_file"
+  log_ok "Got layout and settings from the GUI."
+  return 0
+}
+
 select_layout() {
   # Populates LAYOUT_FILE, either by listing config/*.yaml for the user to
   # pick from, or (under -y) by auto-selecting a sensible default.
@@ -199,8 +246,12 @@ Guided setup for the UWBPX4Sim plugin, models, and ROS 2 bridge.
 
 Options:
   --layout FILE       Layout YAML to configure (also settable via UWB_LAYOUT_FILE).
-                       If omitted, lists config/*.yaml and prompts you to pick one
-                       (auto-selects uwb_layout.example.yaml, or the first found, under -y)
+                       If omitted, opens the browser GUI to build one (or lists
+                       config/*.yaml and prompts you to pick one if the GUI isn't
+                       available; auto-selects uwb_layout.example.yaml, or the
+                       first found, under -y)
+  --no-gui            Skip the browser GUI and go straight to the terminal
+                       layout/world pickers
   --px4-dir DIR       PX4-Autopilot checkout (default: \$PX4_DIR or ~/PX4-Autopilot)
   --ros-ws DIR        ROS 2 workspace root (default: \$ROS_WS or auto-detected)
   --world NAME|PATH   Also install a custom world into PX4 (e.g. walls_nlos, or a full path).
@@ -212,12 +263,12 @@ Options:
   --skip-plugin       Skip plugin copy + CMakeLists.txt/server.config patch step
   --skip-ros          Skip the ROS 2 workspace checks
   -y, --yes           Non-interactive: answer every prompt with its default
-                       (skips the optional world install and PX4/colcon
+                       (skips the GUI, the optional world install, and PX4/colcon
                        rebuilds unless --build/--world are also given)
   -n, --dry-run       Print what would happen without changing anything
   -h, --help          Show this help message
 
-Environment overrides: UWB_LAYOUT_FILE, PX4_DIR, ROS_WS
+Environment overrides: UWB_LAYOUT_FILE, PX4_DIR, ROS_WS, UWB_GUI_PORT (default 5050)
 EOF
 }
 
@@ -232,6 +283,7 @@ while [[ $# -gt 0 ]]; do
     --skip-models) SKIP_MODELS=1; shift ;;
     --skip-plugin) SKIP_PLUGIN=1; shift ;;
     --skip-ros) SKIP_ROS=1; shift ;;
+    --no-gui) NO_GUI=1; shift ;;
     -y|--yes) ASSUME_YES=1; shift ;;
     -n|--dry-run) DRY_RUN=1; shift ;;
     -h|--help) print_usage; exit 0 ;;
@@ -244,15 +296,21 @@ if [[ -z "$ROS_WS" ]]; then
 fi
 
 # Resolve which layout YAML to use: an explicit --layout/UWB_LAYOUT_FILE wins
-# outright; otherwise list config/*.yaml and let the user pick one (or, under
-# -y, auto-select a sensible default). Errors out if none exist at all.
+# outright; otherwise, when running interactively, try the browser GUI
+# first (it can also set WORLD_ARG) and fall back to the terminal picker if
+# it's unavailable or unfinished; under -y/--dry-run/--no-gui, go straight
+# to the terminal picker. Errors out if no layout is ever resolved.
 if [[ -n "$LAYOUT_FILE" ]]; then
   if [[ ! -f "$LAYOUT_FILE" ]]; then
     log_error "Layout YAML not found: $LAYOUT_FILE"
     exit 1
   fi
 else
-  select_layout
+  layout_from_gui=0
+  if (( ! NO_GUI && ! ASSUME_YES && ! DRY_RUN )) && [[ -t 0 ]] && run_gui; then
+    layout_from_gui=1
+  fi
+  (( layout_from_gui )) || select_layout
 fi
 
 echo "UWBPX4Sim guided setup"

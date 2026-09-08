@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>UWBPX4Sim setup</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header>
+  <h1>UWBPX4Sim setup</h1>
+  <p class="subtitle">Build a layout, tune the plugin, then continue setup_simulator.sh.</p>
+</header>
+
+<nav class="tabs">
+  <button class="tab-btn active" data-tab="layout">Layout</button>
+  <button class="tab-btn" data-tab="params">Plugin Parameters</button>
+</nav>
+
+<main>
+  <section id="tab-layout" class="tab-panel active">
+    <div class="toolbar">
+      <label>Preset
+        <select id="layout-preset"></select>
+      </label>
+      <button id="layout-load">Load</button>
+      <button id="layout-new">New</button>
+      <label>Save as
+        <input id="layout-filename" type="text" placeholder="uwb_layout_gui.yaml">
+      </label>
+      <button id="layout-save">Save</button>
+      <span id="layout-status" class="status"></span>
+    </div>
+
+    <div class="vehicle-columns">
+      <div class="vehicle-column">
+        <div class="column-header">
+          <h2>UAVs</h2>
+          <button id="add-uav">+ Add UAV</button>
+        </div>
+        <div id="uav-list"></div>
+      </div>
+      <div class="vehicle-column">
+        <div class="column-header">
+          <h2>UGVs</h2>
+          <button id="add-ugv">+ Add UGV</button>
+        </div>
+        <div id="ugv-list"></div>
+      </div>
+    </div>
+
+    <div class="toolbar world-bar">
+      <label>Custom world
+        <select id="world-select"><option value="">None (PX4 default world)</option></select>
+      </label>
+    </div>
+  </section>
+
+  <section id="tab-params" class="tab-panel">
+    <div class="toolbar">
+      <label>Preset
+        <select id="params-preset"><option value="">(current params.yaml)</option></select>
+      </label>
+      <button id="params-load">Load</button>
+      <label>Save as preset
+        <input id="params-preset-name" type="text" placeholder="preset name">
+      </label>
+      <button id="params-save-preset">Save preset</button>
+      <button id="params-apply">Apply to params.yaml</button>
+      <span id="params-status" class="status"></span>
+    </div>
+    <div id="params-groups"></div>
+  </section>
+</main>
+
+<footer>
+  <button id="continue-setup" class="primary">Continue Setup &rarr;</button>
+  <span id="continue-status" class="status"></span>
+  <p class="hint">Saves the current layout and plugin parameters, then hands control back to setup_simulator.sh in your terminal.</p>
+</footer>
+
+<template id="tpl-sensor-row">
+  <div class="sensor-row">
+    <label>id <input type="number" class="sensor-id" min="0" step="1"></label>
+    <label>x <input type="number" class="sensor-x" step="0.001"></label>
+    <label>y <input type="number" class="sensor-y" step="0.001"></label>
+    <label>z <input type="number" class="sensor-z" step="0.001"></label>
+    <button class="remove-sensor" title="Remove">&times;</button>
+  </div>
+</template>
+
+<script src="app.js"></script>
+</body>
+</html>
