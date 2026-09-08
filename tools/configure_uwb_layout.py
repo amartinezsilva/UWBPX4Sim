@@ -742,6 +742,19 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
     }
 
 
+# Offboard params declared as `double` ROS parameters (see
+# uav_offboard_control.cpp / agv_offboard_control.cpp) -- rclcpp's parameter
+# type checking is strict, so a value that round-trips through YAML/JSON as
+# a whole number (e.g. a layout hand-edited or built via the setup GUI with
+# "2" instead of "2.0") arrives as a Python int and gets rejected at launch
+# with InvalidParameterTypeException, killing the offboard node outright
+# (which looks like "trajectories aren't working" since the node never gets
+# far enough to open the CSV). Coerced below regardless of where the value
+# came from, so this is fixed for existing layout files too, not just new
+# GUI saves.
+_FLOAT_OFFBOARD_KEYS = ("lookahead_distance", "cruise_speed", "odom_error_position", "odom_error_angle")
+
+
 def resolve_offboard_params(
     overrides: Mapping[str, Any],
     *,
@@ -750,6 +763,9 @@ def resolve_offboard_params(
 ) -> dict[str, Any]:
     merged = _default_offboard_params(role, vehicle_id)
     merged.update(overrides)
+    for key in _FLOAT_OFFBOARD_KEYS:
+        if key in merged:
+            merged[key] = float(merged[key])
     return merged
 
 
