@@ -639,9 +639,31 @@ fi
 
 log_step "Step 6/6: Done"
 echo
+
+# This script cannot export these into whatever shell invoked it -- a child
+# process can never modify its parent's environment, that's a hard Unix
+# constraint, not an oversight. Instead, write the chosen settings to a
+# sourceable file: callers that stay alive across both this script and
+# simulator_launcher.sh (like docker/entrypoint.sh's menu loop) can source
+# it themselves to pick them up automatically; everyone else can still just
+# copy the export lines printed below, or `source .setup_env` by hand.
+SETUP_ENV_FILE="$SCRIPT_DIR/.setup_env"
+if (( DRY_RUN )); then
+  log_info "[DRY-RUN] would write chosen settings to $SETUP_ENV_FILE"
+else
+  {
+    printf 'export UWB_LAYOUT_FILE=%q\n' "$LAYOUT_FILE"
+    [[ -n "$WORLD_ARG" ]] && printf 'export GZ_WORLD=%q\n' "${world_name%.sdf}"
+    printf 'export PX4_DIR=%q\n' "$PX4_DIR"
+    [[ -n "$ROS_WS" ]] && printf 'export ROS_WS=%q\n' "$ROS_WS"
+  } > "$SETUP_ENV_FILE"
+  log_ok "Wrote $SETUP_ENV_FILE"
+fi
+
 echo "Next steps:"
 echo "  1. Source your ROS 2 workspace:   source ${ROS_WS:-<ros_ws>}/install/setup.bash"
 echo "  2. Launch the simulation:"
+echo "       source \"$SETUP_ENV_FILE\"   # sets the exports below in one go"
 echo "       export UWB_LAYOUT_FILE=\"$LAYOUT_FILE\""
 [[ -n "$WORLD_ARG" ]] && echo "       export GZ_WORLD=\"${world_name%.sdf}\""
 echo "       export PX4_DIR=\"$PX4_DIR\""

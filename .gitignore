@@ -1,2 +1,3 @@
 *.pyc
 models/custom_models/*
+.setup_env
