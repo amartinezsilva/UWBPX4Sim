@@ -212,7 +212,7 @@ select_layout() {
   fi
 
   if (( ASSUME_YES )); then
-    default="$CONFIG_DIR/uwb_layout.example.yaml"
+    default="$CONFIG_DIR/demo_nlos.yaml"
     for i in "${!layouts[@]}"; do
       if [[ "${layouts[$i]}" == "$default" ]]; then
         LAYOUT_FILE="$default"
@@ -251,7 +251,7 @@ Options:
   --layout FILE       Layout YAML to configure (also settable via UWB_LAYOUT_FILE).
                        If omitted, opens the browser GUI to build one (or lists
                        config/*.yaml and prompts you to pick one if the GUI isn't
-                       available; auto-selects uwb_layout.example.yaml, or the
+                       available; auto-selects demo_nlos.yaml, or the
                        first found, under -y)
   --no-gui            Skip the browser GUI and go straight to the terminal
                        layout/world pickers

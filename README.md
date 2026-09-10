@@ -123,7 +123,7 @@ Every `.sdf` file under `worlds/` is copied into PX4 on every run regardless of 
 Common options:
 
 ```bash
-./setup_simulator.sh --layout config/uwb_layout.four_vehicle_example.yaml   # use a specific layout, skip the picker
+./setup_simulator.sh --layout config/demo_nlos.yaml                        # use a specific layout, skip the picker
 ./setup_simulator.sh --px4-dir /path/to/PX4-Autopilot --ros-ws /path/to/ros_ws   # non-default locations
 ./setup_simulator.sh -y                                                     # non-interactive, safe defaults (skips optional world/rebuild unless also given --build/--world)
 ./setup_simulator.sh -n                                                     # dry run: print what would happen, change nothing
@@ -154,7 +154,7 @@ The experiment layout YAML is used to tell the simulator:
 From the repository root:
 
 ```bash
-python3 tools/configure_uwb_layout.py --layout config/uwb_layout.example.yaml
+python3 tools/configure_uwb_layout.py --layout config/demo_nlos.yaml
 ```
 
 This generates:
@@ -406,13 +406,6 @@ x=0.5, y=-0.5, z=2.0
 
 then the offboard node interprets that trajectory point in the robot-local ENU frame and transforms it into the world frame using that `spawn_pose`.
 
-The repository also includes this exact test layout as:
-
-```text
-config/uwb_layout.four_vehicle_example.yaml
-```
-
-
 ## 3. ROS 2 workspace setup
 
 **Note**: `setup_simulator.sh` checks this for you (verifying `eliko_ros` is present and offering to `colcon build` `px4_sim_offboard`) as part of the [automated setup](#quick-start-automated-setup), as long as `UWBPX4Sim` is checked out under your ROS 2 workspace's `src/`.
@@ -575,7 +568,7 @@ for every anchor-tag pair defined by the current layout.
 
 ## 4. Running the simulation
 
-`simulator_launcher.sh` reads the same layout YAML for robot spawn poses, and the ROS 2 offboard launch reads that same file again to derive the node parameters. The launcher does not generate models or the bridge config for you -- run `./setup_simulator.sh` first (see [Quick start: automated setup](#quick-start-automated-setup)). By default it uses `config/uwb_layout.example.yaml`
+`simulator_launcher.sh` reads the same layout YAML for robot spawn poses, and the ROS 2 offboard launch reads that same file again to derive the node parameters. The launcher does not generate models or the bridge config for you -- run `./setup_simulator.sh` first (see [Quick start: automated setup](#quick-start-automated-setup)). By default it uses `config/demo_nlos.yaml`
 
 You can point it to a different layout file with:
 

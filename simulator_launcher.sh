@@ -60,7 +60,7 @@ DEFAULT_ROS_WS="$(detect_default_ros_ws)"
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
-UWB_LAYOUT_FILE="${UWB_LAYOUT_FILE:-$SCRIPT_DIR/config/uwb_layout.example.yaml}"
+UWB_LAYOUT_FILE="${UWB_LAYOUT_FILE:-$SCRIPT_DIR/config/demo_nlos.yaml}"
 LAYOUT_TOOL="$SCRIPT_DIR/tools/configure_uwb_layout.py"
 
 # GZ_WORLD, unless already set (e.g. by setup_simulator.sh's .setup_env, or
@@ -83,7 +83,7 @@ print_usage() {
 Usage: $(basename "$0")
 
 Options:
-  (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/uwb_layout.four_vehicle_example.yaml)
+  (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/demo_nlos.yaml)
   (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: the
                        layout's own 'world:' field if it names one installed there, else "default")
   -h, --help           Show this help message.

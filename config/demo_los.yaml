@@ -1,0 +1,33 @@
+uavs:
+- id: 0
+  offboard:
+    cruise_speed: 0.5
+    lookahead_distance: 2
+    odom_error_angle: 0
+    odom_error_position: 0
+    trajectory_csv_file: trajectory_los_uav.csv
+  spawn_pose: [3, 0, 0.2, 0, 0, 1.57079632679]
+  tags:
+  - id: 1
+    position: [-0.24, -0.24, -0.06]
+  - id: 2
+    position: [0.24, 0.24, -0.06]
+ugvs:
+- anchors:
+  - id: 1
+    position: [-0.32, 0.3, 0.875]
+  - id: 2
+    position: [0.32, -0.3, 0.875]
+  - id: 3
+    position: [0.32, 0.3, 0.33]
+  - id: 4
+    position: [-0.32, -0.3, 0.33]
+  id: 0
+  offboard:
+    cruise_speed: 0.52
+    lookahead_distance: 2
+    odom_error_angle: 0
+    odom_error_position: 0
+    trajectory_csv_file: trajectory_los_agv.csv
+  spawn_pose: [0, 0, 0, 0, 0, 1.57079632679]
+world: empty
