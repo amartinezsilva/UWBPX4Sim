@@ -60,9 +60,23 @@ DEFAULT_ROS_WS="$(detect_default_ros_ws)"
 
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-$DEFAULT_ROS_WS}"
-GZ_WORLD="${GZ_WORLD:-default}"
 UWB_LAYOUT_FILE="${UWB_LAYOUT_FILE:-$SCRIPT_DIR/config/uwb_layout.example.yaml}"
 LAYOUT_TOOL="$SCRIPT_DIR/tools/configure_uwb_layout.py"
+
+# GZ_WORLD, unless already set (e.g. by setup_simulator.sh's .setup_env, or
+# by hand), defaults to the layout's own `world:` field -- resolved by
+# name against PX4's worlds directory, the same way setup_simulator.sh's
+# own world step does. That way running this script standalone (without
+# having just run setup in the same shell) still honors a world named
+# directly in the layout, not just PX4's default one.
+if [[ -z "${GZ_WORLD:-}" && -f "$UWB_LAYOUT_FILE" ]]; then
+  GZ_WORLD="$(python3 "$LAYOUT_TOOL" --layout "$UWB_LAYOUT_FILE" --emit-world 2>/dev/null || true)"
+  if [[ -n "$GZ_WORLD" && ! -f "$PX4_DIR/Tools/simulation/gz/worlds/$GZ_WORLD.sdf" ]]; then
+    echo "[WARN] Layout names world '$GZ_WORLD', but it isn't installed under $PX4_DIR/Tools/simulation/gz/worlds -- using PX4's default world. Re-run setup_simulator.sh to install it." >&2
+    GZ_WORLD=""
+  fi
+fi
+GZ_WORLD="${GZ_WORLD:-default}"
 
 print_usage() {
   cat <<EOF2
@@ -70,7 +84,8 @@ Usage: $(basename "$0")
 
 Options:
   (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/uwb_layout.four_vehicle_example.yaml)
-  (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: default)
+  (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: the
+                       layout's own 'world:' field if it names one installed there, else "default")
   -h, --help           Show this help message.
 EOF2
 }

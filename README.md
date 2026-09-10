@@ -116,7 +116,9 @@ From the repository root:
 ./setup_simulator.sh
 ```
 
-Run with no arguments, it walks you through everything interactively: if you don't pass `--layout`, it lists the YAML files in `config/` and asks you to pick one; if you don't pass `--world`, it lists the `.sdf` files in `worlds/` (plus a "none" option); and it asks before doing anything slow or destructive, like rebuilding PX4 (`make px4_sitl`) or running `colcon build`.
+Run with no arguments, it walks you through everything interactively: if you don't pass `--layout`, it lists the YAML files in `config/` and asks you to pick one; the world to use comes from that layout's own `world:` field (see below), or `--world`, or -- if neither is set -- it lists the `.sdf` files in `worlds/` and asks you to pick one (plus a "none" option); and it asks before doing anything slow or destructive, like rebuilding PX4 (`make px4_sitl`) or running `colcon build`.
+
+Every `.sdf` file under `worlds/` is copied into PX4 on every run regardless of which one ends up selected, so any of them -- and any world PX4 already ships (e.g. `baylands`) -- can be named by `world:`/`--world`; an unrecognized name falls back to PX4's default world with a warning.
 
 Common options:
 
@@ -162,6 +164,15 @@ This generates:
 - The GZ/ROS2 bridge description file for your customized setup in `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`
 
 The script must be executed in order to 1) create a layout for the first time, 2) modify the sensor layout in any of the robots, or 3) add or remove robots from the simulation.
+
+Besides `uavs`/`ugvs`, the layout also accepts a top-level `world` field naming the Gazebo world to use -- either a custom one from `worlds/*.sdf`, or one PX4 already ships (e.g. `baylands`). `setup_simulator.sh` resolves it by name against PX4's own worlds directory after copying every custom world there (see [Quick start: automated setup](#quick-start-automated-setup)); an unrecognized name, or omitting the field, falls back to PX4's default world. `--world` overrides it.
+
+```yaml
+world: walls_nlos
+uavs:
+  - id: 0
+    ...
+```
 
 The layout YAML is structured robot-by-robot. Each vehicle entry contains:
 
@@ -364,7 +375,7 @@ The parameter values inside the block come from `uwb_gazebo_plugin/params.yaml` 
 </plugin>
 ```
 
-5. (**OPTIONAL**) If you want to run the experiment with a custom world instead of the ones provided by PX4 (such as the ``walls_nlos.sdf`` file available in this repository in the ``worlds`` folder), make sure to copy your ``.sdf`` file to the following path:
+5. (**OPTIONAL**) If you want to run the experiment with a custom world instead of the ones provided by PX4 (such as the ``walls_nlos.sdf`` file available in this repository in the ``worlds`` folder), make sure to copy your ``.sdf`` file to the following path (`setup_simulator.sh` does this for every file under `worlds/` automatically -- see [Quick start: automated setup](#quick-start-automated-setup) -- so this manual copy is only needed if you're doing this step by hand):
 
 ```text
 <PX4-Autopilot>/Tools/simulation/gz/worlds/
@@ -564,7 +575,7 @@ for every anchor-tag pair defined by the current layout.
 
 ## 4. Running the simulation
 
-`simulator_launcher.sh` reads the same layout YAML for robot spawn poses, and the ROS 2 offboard launch reads that same file again to derive the node parameters. The launcher does not generate models or the bridge config for you -- run `./setup_simulator.sh` first (see [Quick start: automated setup](#quick-start-automated-setup)). By default it uses `config/uwb_layout.four_vehicle_example.yaml`
+`simulator_launcher.sh` reads the same layout YAML for robot spawn poses, and the ROS 2 offboard launch reads that same file again to derive the node parameters. The launcher does not generate models or the bridge config for you -- run `./setup_simulator.sh` first (see [Quick start: automated setup](#quick-start-automated-setup)). By default it uses `config/uwb_layout.example.yaml`
 
 You can point it to a different layout file with:
 
@@ -572,13 +583,13 @@ You can point it to a different layout file with:
 export UWB_LAYOUT_FILE=/path/to/your_layout.yaml
 ```
 
-Additionally, the experiment will use the default (empty) Gazebo world for the experiment, but you can use any other custom environment (p.e. the ones located in the `worlds/` folder) by setting:
+The world used is that layout's own `world:` field (see [1. Setting up the experiment](#1-setting-up-the-experiment)) if it names one already installed under PX4 -- `setup_simulator.sh` does that install, so run it first if you've just added or changed `world:`. Otherwise this falls back to PX4's default (empty) world. Override either one with:
 
 ```bash
 export GZ_WORLD=<your-world-name>
 ```
 
-**NOTE**: before doing this, make sure you have included your custom world in the corresponding folder in ``PX4-Autopilot`` so that PX4 can find it. 
+**NOTE**: whichever way a custom world is named, make sure it's actually been copied into `PX4-Autopilot`'s worlds folder first (`setup_simulator.sh` does this for every file under `worlds/` automatically) so that PX4 can find it. 
 
 Finally, `simulator_launcher.sh` also makes the following assumptions:
 

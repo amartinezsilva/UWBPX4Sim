@@ -50,9 +50,12 @@
     </div>
 
     <div class="toolbar world-bar">
-      <label>Custom world
-        <select id="world-select"><option value="">None (PX4 default world)</option></select>
+      <label>World
+        <input id="world-input" type="text" list="world-options" placeholder="(PX4 default world)">
+        <datalist id="world-options"></datalist>
       </label>
+      <p class="hint">Saved with the layout. Name a custom world from worlds/*.sdf (suggested below), or any
+        world PX4 already ships (e.g. baylands) -- falls back to PX4's default if the name isn't found there.</p>
     </div>
   </section>
 

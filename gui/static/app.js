@@ -45,7 +45,7 @@ const PARAM_UI = {
 };
 
 let trajectoryOptions = [];
-let layout = { uavs: [], ugvs: [] };
+let layout = { uavs: [], ugvs: [], world: "" };
 
 // ---------------------------------------------------------------------------
 // small DOM helper
@@ -246,8 +246,8 @@ async function refreshLayoutPresets() {
 
 async function refreshWorlds() {
   const names = await api("/api/worlds");
-  const select = document.getElementById("world-select");
-  names.forEach((n) => select.appendChild(el("option", { value: n, text: n })));
+  const datalist = document.getElementById("world-options");
+  names.forEach((n) => datalist.appendChild(el("option", { value: n })));
 }
 
 async function refreshTrajectories() {
@@ -258,8 +258,9 @@ document.getElementById("add-uav").addEventListener("click", () => addVehicle("u
 document.getElementById("add-ugv").addEventListener("click", () => addVehicle("ugv"));
 
 document.getElementById("layout-new").addEventListener("click", () => {
-  layout = { uavs: [], ugvs: [] };
+  layout = { uavs: [], ugvs: [], world: "" };
   renderVehicles();
+  document.getElementById("world-input").value = "";
   setStatus("layout-status", "New empty layout.");
 });
 
@@ -268,15 +269,20 @@ document.getElementById("layout-load").addEventListener("click", async () => {
   if (!name) return;
   try {
     const data = await api("/api/layouts/" + encodeURIComponent(name));
-    layout = { uavs: data.uavs || [], ugvs: data.ugvs || [] };
+    layout = { uavs: data.uavs || [], ugvs: data.ugvs || [], world: data.world || "" };
     layout.uavs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UAV_OFFBOARD))));
     layout.ugvs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UGV_OFFBOARD))));
     renderVehicles();
     document.getElementById("layout-filename").value = name;
+    document.getElementById("world-input").value = layout.world;
     setStatus("layout-status", "Loaded " + name + ".", true);
   } catch (e) {
     setStatus("layout-status", e.message, false);
   }
+});
+
+document.getElementById("world-input").addEventListener("input", (e) => {
+  layout.world = e.target.value.trim();
 });
 
 async function saveLayout(name) {
@@ -429,7 +435,6 @@ document.getElementById("params-apply").addEventListener("click", async () => {
 
 document.getElementById("continue-setup").addEventListener("click", async () => {
   const filename = document.getElementById("layout-filename").value.trim() || "uwb_layout_gui.yaml";
-  const world = document.getElementById("world-select").value;
   setStatus("continue-status", "Saving...");
   try {
     await saveLayout(filename);
@@ -437,7 +442,7 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
     await api("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout_file: filename, world }),
+      body: JSON.stringify({ layout_file: filename }),
     });
     setStatus("continue-status", "Done -- continuing setup in your terminal. You can close this tab.", true);
     document.getElementById("continue-setup").disabled = true;

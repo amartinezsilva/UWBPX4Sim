@@ -12,7 +12,10 @@
 #   4. Register the plugin in gz_plugins/CMakeLists.txt
 #   5. Register the plugin instance in gz_bridge/server.config, with its
 #      parameter values synced from uwb_gazebo_plugin/params.yaml
-#   6. (optional) Copy a custom world (e.g. worlds/walls_nlos.sdf)
+#   6. Copy every custom world (worlds/*.sdf) into PX4, then select one by
+#      name -- from the layout's own `world:` field, --world, or the
+#      terminal picker -- falling back to PX4's default world if the name
+#      isn't found there
 #   7. (optional) Rebuild PX4 (make px4_sitl)
 #   8. Check the ROS 2 workspace side (px4_sim_offboard, eliko_ros)
 #
@@ -254,9 +257,15 @@ Options:
                        layout/world pickers
   --px4-dir DIR       PX4-Autopilot checkout (default: \$PX4_DIR or ~/PX4-Autopilot)
   --ros-ws DIR        ROS 2 workspace root (default: \$ROS_WS or auto-detected)
-  --world NAME|PATH   Also install a custom world into PX4 (e.g. walls_nlos, or a full path).
-                       If omitted, lists worlds/*.sdf and prompts you to pick one, or none
-                       (under -y, keeps PX4's default world unless a world is named here)
+  --world NAME|PATH   World to use, by name -- either a custom one (worlds/*.sdf,
+                       always copied into PX4 regardless of this flag) or one PX4
+                       already ships (e.g. baylands); a full path to an .sdf file
+                       also works. Falls back to PX4's default world if the name
+                       isn't found there. Overrides the layout's own `world:`
+                       field. If omitted (and the layout doesn't set `world:`
+                       either), lists worlds/*.sdf and prompts you to pick one, or
+                       none (under -y, keeps PX4's default world unless a world is
+                       named by one of those two)
   --build             Rebuild PX4 (make px4_sitl) after patching, without asking
   --no-build          Skip the PX4 rebuild step, without asking
   --skip-models       Skip layout generation + model copy step
@@ -575,38 +584,68 @@ PYEOF
 fi
 
 # ---------------------------------------------------------------------------
-# 3. Optional custom world
+# 3. Gazebo world
 # ---------------------------------------------------------------------------
 
-log_step "Step 3/6: Custom Gazebo world"
+log_step "Step 3/6: Gazebo world"
+
+if [[ ! -d "$PX4_GZ_WORLDS_DIR" ]]; then
+  log_error "PX4 worlds directory not found: $PX4_GZ_WORLDS_DIR (check --px4-dir)"
+  exit 1
+fi
+
+# Every custom world under worlds/ is copied into PX4 unconditionally --
+# not just whichever one ends up selected -- so a layout's `world:` field
+# (or --world) can name any of them, exactly like naming one of PX4's own
+# built-in worlds: both are resolved the same way below, by looking for
+# <name>.sdf directly in PX4's worlds directory once this copy has run.
+shopt -s nullglob
+custom_worlds=("$SCRIPT_DIR"/worlds/*.sdf)
+shopt -u nullglob
+if (( ${#custom_worlds[@]} > 0 )); then
+  for w in "${custom_worlds[@]}"; do
+    if (( DRY_RUN )); then
+      log_info "[DRY-RUN] cp \"$w\" \"$PX4_GZ_WORLDS_DIR/$(basename "$w")\""
+    else
+      cp -f "$w" "$PX4_GZ_WORLDS_DIR/$(basename "$w")"
+    fi
+  done
+  (( DRY_RUN )) || log_ok "Copied ${#custom_worlds[@]} custom world(s) -> $PX4_GZ_WORLDS_DIR/"
+fi
+
+# --world can also be given a direct path to an .sdf file that isn't under
+# worlds/ at all -- copy it in under its own basename too, so it's found
+# by the same name-based lookup below as everything else.
+if [[ -n "$WORLD_ARG" && -f "$WORLD_ARG" ]]; then
+  if (( DRY_RUN )); then
+    log_info "[DRY-RUN] cp \"$WORLD_ARG\" \"$PX4_GZ_WORLDS_DIR/$(basename "$WORLD_ARG")\""
+  else
+    cp -f "$WORLD_ARG" "$PX4_GZ_WORLDS_DIR/$(basename "$WORLD_ARG")"
+  fi
+fi
+
+# Precedence: --world flag > the layout's own `world:` field > (interactive
+# fallback, when neither is set) the terminal picker > PX4's default world.
 if [[ -z "$WORLD_ARG" ]]; then
+  WORLD_ARG="$(python3 "$SCRIPT_DIR/tools/configure_uwb_layout.py" --layout "$LAYOUT_FILE" --emit-world)"
+fi
+if [[ -z "$WORLD_ARG" ]] && [[ -t 0 ]] && (( ! ASSUME_YES && ! DRY_RUN )); then
   select_world
 fi
+
 if [[ -n "$WORLD_ARG" ]]; then
-  if [[ ! -d "$PX4_GZ_WORLDS_DIR" ]]; then
-    log_error "PX4 worlds directory not found: $PX4_GZ_WORLDS_DIR (check --px4-dir)"
-    exit 1
-  fi
-  if [[ -f "$WORLD_ARG" ]]; then
-    WORLD_SRC="$WORLD_ARG"
-  elif [[ -f "$SCRIPT_DIR/worlds/$WORLD_ARG.sdf" ]]; then
-    WORLD_SRC="$SCRIPT_DIR/worlds/$WORLD_ARG.sdf"
-  elif [[ -f "$SCRIPT_DIR/worlds/$WORLD_ARG" ]]; then
-    WORLD_SRC="$SCRIPT_DIR/worlds/$WORLD_ARG"
+  world_name="$(basename "$WORLD_ARG")"
+  world_name="${world_name%.sdf}"
+  if [[ -f "$PX4_GZ_WORLDS_DIR/$world_name.sdf" ]]; then
+    WORLD_ARG="$world_name"
+    log_ok "Using world '$world_name' ($PX4_GZ_WORLDS_DIR/$world_name.sdf)."
+    log_info "Run with: export GZ_WORLD=$world_name"
   else
-    log_error "Could not resolve world '$WORLD_ARG' (looked for the path itself and worlds/$WORLD_ARG.sdf)"
-    exit 1
-  fi
-  world_name="$(basename "$WORLD_SRC")"
-  if (( DRY_RUN )); then
-    log_info "[DRY-RUN] cp \"$WORLD_SRC\" \"$PX4_GZ_WORLDS_DIR/$world_name\""
-  else
-    cp -f "$WORLD_SRC" "$PX4_GZ_WORLDS_DIR/$world_name"
-    log_ok "Copied $world_name -> $PX4_GZ_WORLDS_DIR/"
-    log_info "Run with: export GZ_WORLD=${world_name%.sdf}"
+    log_warn "World '$world_name' not found in $PX4_GZ_WORLDS_DIR -- using PX4's default world instead."
+    WORLD_ARG=""
   fi
 else
-  log_info "Skipping custom world (using PX4's default world)."
+  log_info "Using PX4's default world."
 fi
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterable, List, Mapping, Sequence, Tuple
+from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 import yaml
 
 
@@ -71,6 +71,12 @@ class VehicleLayout:
 class UwbLayout:
     uavs: List[VehicleLayout]
     ugvs: List[VehicleLayout]
+    # Name of a Gazebo world to launch with (e.g. "walls_nlos", or a world
+    # PX4 already ships like "baylands") -- resolved by setup_simulator.sh
+    # against PX4's worlds directory *after* copying every custom world
+    # there, so this can name either kind. None/omitted means PX4's
+    # default world.
+    world: Optional[str] = None
 
     @property
     def all_tags(self) -> List[SensorPlacement]:
@@ -330,9 +336,17 @@ def load_layout(layout_path: Path) -> UwbLayout:
         sensor_label="anchor",
         global_seen_sensor_ids=seen_anchor_ids,
     )
+
+    world = data.get("world")
+    if world is not None:
+        if not isinstance(world, str):
+            raise ValueError("'world' must be a string (a world name).")
+        world = world.strip() or None
+
     layout = UwbLayout(
         uavs=uavs,
         ugvs=ugvs,
+        world=world,
     )
 
     if not layout.all_anchors:
@@ -873,6 +887,11 @@ def main() -> None:
         help="Print tab-separated spawn information instead of generating models and bridge files.",
     )
     parser.add_argument(
+        "--emit-world",
+        action="store_true",
+        help="Print the layout's 'world' field (empty if unset) instead of generating models and bridge files.",
+    )
+    parser.add_argument(
         "--layout",
         required=True,
         type=Path,
@@ -896,6 +915,10 @@ def main() -> None:
     if args.emit_spawn_layout:
         for assignment in iter_spawn_assignments(layout):
             print(format_spawn_line(assignment))
+        return
+
+    if args.emit_world:
+        print(layout.world or "")
         return
 
     uwb_root = args.uwb_root.resolve()

@@ -86,6 +86,10 @@ def validate_layout(layout: dict[str, Any]) -> list[str]:
         if len(v.get("spawn_pose") or []) != 6:
             errors.append(f"UGV {v.get('id')}: spawn_pose must have 6 values.")
 
+    world = layout.get("world")
+    if world is not None and not isinstance(world, str):
+        errors.append("world must be a string (a world name).")
+
     return errors
 
 
@@ -216,6 +220,8 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         errors = validate_layout(layout)
         if errors:
             return jsonify({"error": " ".join(errors)}), 400
+        if not layout.get("world"):
+            layout.pop("world", None)  # omit rather than write "world: ''"
         path = config_dir / fname
         with open(path, "w") as f:
             yaml.dump(layout, f, Dumper=LayoutDumper, sort_keys=False, default_flow_style=False)
@@ -284,17 +290,18 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
 
     @app.post("/api/continue")
     def continue_setup():
+        # No separate world handoff here -- the layout YAML itself is the
+        # single source of truth for which world to use (its own `world`
+        # field, saved by save_layout above); setup_simulator.sh reads that
+        # straight from LAYOUT_FILE via `configure_uwb_layout.py --emit-world`.
         body = request.get_json(force=True, silent=True) or {}
         layout_file = body.get("layout_file") or ""
-        world = body.get("world") or ""
         if not layout_file or not (config_dir / layout_file).is_file():
             return jsonify({"error": "Save the layout before continuing."}), 400
 
         layout_path = str((config_dir / layout_file).resolve())
         with open(selection_file, "w") as f:
             f.write(f"LAYOUT_FILE={_shell_quote(layout_path)}\n")
-            if world:
-                f.write(f"WORLD_ARG={_shell_quote(world)}\n")
 
         def _shutdown():
             os._exit(0)
