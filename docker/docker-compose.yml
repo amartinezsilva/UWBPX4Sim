@@ -1,0 +1,88 @@
+# Convenience wrapper around Dockerfile.
+#
+# To build (or launch) the image: ./setup.sh (wraps `docker compose build`,
+# tells you about any existing image, checks disk space -- see setup.sh --help).
+#
+# This is UWBPX4Sim's own, simulation-only image. mr-radio-localization's
+# docker/ builds FROM this one and adds its own localization dependencies
+# on top -- its setup.sh builds this image first automatically if it's
+# missing, so you normally don't need to touch this docker/ directly unless
+# you just want the simulator standalone.
+#
+# Usage (from this docker/ directory, Linux host with an X server):
+#   xhost +local:docker                           # allow the container to reach your X server (once per host session)
+#   d="${DISPLAY#*:}"; chmod 777 "/tmp/.X11-unix/X${d%%.*}"   # see note below -- needed on Wayland/XWayland hosts
+#   docker compose run --service-ports --build --rm app   # interactive setup/demo menu
+#   docker compose run --rm app bash                       # skip the menu, open a shell
+#   docker compose run --rm app ros2 topic list              # run a one-off command
+#
+# The chmod is a separate, extra requirement on Wayland/XWayland desktops (GNOME/GDM and others)
+# Classic Xorg sessions (no Wayland) are usually already 777 and don't need
+# this at all -- if `xhost` alone works, skip the chmod.
+#
+# `docker compose run` (unlike `up`) does not publish a service's `ports:`
+# unless you pass --service-ports -- without it, setup_simulator.sh's
+# configuration GUI (option 1 in the menu) starts fine inside the
+# container but is unreachable from the host browser. Not needed for the
+# `bash`/one-off examples above, which don't go through the menu.
+#
+# --rm avoids leaving stopped containers behind between runs.
+
+services:
+  app:
+    build:
+      context: .
+    image: uwbpx4sim:jazzy
+    stdin_open: true
+    tty: true
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - UWB_GUI_PORT=${UWB_GUI_PORT:-5050}
+      # GPU rendering for Gazebo. NVIDIA_DRIVER_CAPABILITIES defaults to
+      # just "compute,utility" without this, which is enough for CUDA but
+      # not for creating a GL context.
+      - NVIDIA_DRIVER_CAPABILITIES=all
+      # If your host uses NVIDIA PRIME "on-demand" mode (`prime-select
+      # query`) -- the Intel iGPU renders by default and apps only use the
+      # NVIDIA GPU when they explicitly ask via these vars.
+      - __NV_PRIME_RENDER_OFFLOAD=1
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+      - __VK_LAYER_NV_optimus=NVIDIA_only
+    ports:
+      # setup_simulator.sh's browser-based configuration GUI (gui/app.py).
+      # Passed into the container via UWB_GUI_PORT above too, so overriding
+      # it on the host changes both what's published and what the GUI binds to.
+      - "${UWB_GUI_PORT:-5050}:${UWB_GUI_PORT:-5050}"
+    volumes:
+      - ../config:/home/jazzy/ros2_ws/src/UWBPX4Sim/config
+      - ../uwb_gazebo_plugin:/home/jazzy/ros2_ws/src/UWBPX4Sim/uwb_gazebo_plugin
+      - ../worlds:/home/jazzy/ros2_ws/src/UWBPX4Sim/worlds
+      - ../gui:/home/jazzy/ros2_ws/src/UWBPX4Sim/gui
+      # Mounted onto the *installed* path, not the source tree: the offboard
+      # nodes load trajectory_csv_file via ament_index_cpp's
+      # get_package_share_directory("px4_sim_offboard"), i.e. from
+      # install/px4_sim_offboard/share/..., not from ROS2/px4_sim_offboard/
+      # in source. This is transparent for the bundled trajectories and
+      # adds the ability to drop in new ones from the host without rebuilding.
+      - ../ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    devices:
+      - /dev/fuse
+    cap_add:
+      - SYS_ADMIN
+    security_opt:
+      - apparmor:unconfined
+    # NVIDIA GPU passthrough for Gazebo rendering (needs the host's NVIDIA
+    # driver + nvidia-container-toolkit installed). This `deploy.resources`
+    # form works with plain `docker compose run`/`up` outside Swarm too --
+    # Compose specifically special-cases GPU device requests for that,
+    # unlike other `deploy:` fields which are otherwise Swarm-only and
+    # silently ignored.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]

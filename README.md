@@ -28,6 +28,28 @@ It includes:
 
 ![](images/SimDiagram.png)
 
+## Running with Docker
+
+A `docker/` folder is provided with a ready-to-use image (Ubuntu 24.04, ROS 2 Jazzy, Gazebo Harmonic, PX4, and this repo's plugin/bridge pre-built) as an alternative to setting everything up natively. It requires [Docker](https://docs.docker.com/engine/install/) and the [Docker Compose plugin](https://docs.docker.com/compose/install/).
+
+```bash
+cd <ros_ws>/src
+git clone --recurse-submodules https://github.com/amartinezsilva/UWBPX4Sim.git
+cd UWBPX4Sim/docker
+./setup.sh
+```
+
+The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (15-30 minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
+
+1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available.
+2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`.
+3. **Open a shell**: skip the menu and get a plain shell in the container.
+4. **Exit**: stops the container, and asks whether to remove it completely instead (default just stops it) -- everything else, including closing your terminal, leaves it running with your configuration intact. Run `./setup.sh` again any time to get back to this same menu.
+
+`docker-compose.yml` bind-mounts `config/`, `uwb_gazebo_plugin/` (including `params.yaml`), `worlds/`, and `ROS2/px4_sim_offboard/trajectories/` from the host into the container, so editing a layout, plugin parameters, a custom world, or a trajectory CSV on the host takes effect the next time setup (or the simulation) runs -- no rebuild needed.
+
+This image is also the base that [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization)'s own Docker image builds `FROM`, adding its radar/localization stack on top -- see that repo's `docker/` for the layered setup.
+
 ## Prerequisites and dependencies
 
 This repository is intended for the PX4/Gazebo SITL workflow. The simulation side has been tested with **Ubuntu 24.04 LTS**, **ROS 2 Jazzy** and **Gazebo Harmonic**:
