@@ -44,9 +44,14 @@ ARG CACHEBUST=1
 # without needing UWBPX4Sim's own source at all -- it's already built here.
 RUN cd && mkdir -p ros2_ws/src && cd ros2_ws/src && git clone https://github.com/amartinezsilva/UWBPX4Sim --recursive
 SHELL ["/bin/bash", "-c"]
-RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_msgs.git && cd ~/ros2_ws
+
+# Pinned to known-compatible commits, not each repo's floating default
+RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_msgs.git && \
+    cd px4_msgs && git checkout 06608e367db26fe8708b866045423b67b3a8a6c7 && cd ~/ros2_ws
+RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_ros_com && \
+    cd px4_ros_com && git checkout 86e9aeb20e55a4673fa8a9f1c29ea06a6c5ad1af && cd ~/ros2_ws
+
 RUN cd $HOME/ros2_ws/src && git clone https://github.com/robotics-upo/eliko_ros.git && cd ~/ros2_ws
-RUN cd $HOME/ros2_ws/src && git clone https://github.com/PX4/px4_ros_com && cd ~/ros2_ws
 
 # By default the DockerFile uses the root as user.
 # We will add a custom user so that we work in user space by default
