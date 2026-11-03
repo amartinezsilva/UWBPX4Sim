@@ -107,38 +107,38 @@ The blocked thickness used by the generic curve is $\tau = \tau_{\text{wall}} + 
 
 Each degradation factor is mapped to a severity in $[0, 1]$, using
 
-$$
-\operatorname{ramp}(x; a, b) = \operatorname{clamp}\!\left(\frac{x - a}{b - a}, 0, 1\right), \qquad
+```math
+\mathrm{ramp}(x; a, b) = \mathrm{clamp}\left(\frac{x - a}{b - a}, 0, 1\right), \qquad
 E(s; y_0, y_1) = y_0 \left(\frac{y_1}{y_0}\right)^{s}, \qquad
-a \oplus b = a + (1 - a)\, b = 1 - (1 - a)(1 - b).
-$$
+a \oplus b = a + (1 - a) b = 1 - (1 - a)(1 - b).
+```
 
 $E$ maps a severity onto a parameter range exponentially; $\oplus$ combines two severities so that each only fills the headroom the other leaves (no early saturation).
 
 **Distance**, with separate ramps for noise ($d^{\sigma}_{0,1}$ = `los_stddev_start_distance_m`, `los_stddev_end_distance_m`) and dropout ($d^{p}_{0,1}$ = `los_dropout_start_distance_m`, `los_dropout_end_distance_m`):
 
-$$
-s_d^{\sigma} = \operatorname{ramp}(d;\ d^{\sigma}_0, d^{\sigma}_1), \qquad
-s_d^{p} = \operatorname{ramp}(d;\ d^{p}_0, d^{p}_1)
-$$
+```math
+s_d^{\sigma} = \mathrm{ramp}(d; d^{\sigma}_0, d^{\sigma}_1), \qquad
+s_d^{p} = \mathrm{ramp}(d; d^{p}_0, d^{p}_1)
+```
 
 **Thickness** -- piecewise linear between $\tau_{\text{LOS}}$ = `los_max_thickness_m`, $\tau_{\text{soft}}$ = `soft_nlos_max_thickness_m` and $\tau_{\text{blk}}$ = `blackout_thickness_m`, with the Hard-NLOS segment steeper by $1 + r$ ($r$ = `hard_nlos_gap_ratio`, `0` = same slope, `1` = double):
 
-$$
+```math
 s_\tau(\tau) =
 \begin{cases}
 0 & \tau \le \tau_{\text{LOS}} \\
-k\,(\tau - \tau_{\text{LOS}}) & \tau_{\text{LOS}} < \tau < \tau_{\text{soft}} \\
-k\,(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)\,k\,(\tau - \tau_{\text{soft}}) & \tau_{\text{soft}} \le \tau < \tau_{\text{blk}} \\
+k(\tau - \tau_{\text{LOS}}) & \tau_{\text{LOS}} < \tau < \tau_{\text{soft}} \\
+k(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)k(\tau - \tau_{\text{soft}}) & \tau_{\text{soft}} \le \tau < \tau_{\text{blk}} \\
 1 & \tau \ge \tau_{\text{blk}}
 \end{cases}
 \qquad
 k = \frac{1}{(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)(\tau_{\text{blk}} - \tau_{\text{soft}})}
-$$
+```
 
 **Material** -- Beer-Lambert attenuation, with a per-material penetration length $\lambda_m$ = `material_<m>_penetration_m`:
 
-$$
+```math
 A = \sum_m \frac{\ell_m}{\lambda_m}, \qquad
 s_{\text{mat}} = 1 - e^{-A}, \qquad
 \bar s_{\text{mat}} =
@@ -146,30 +146,30 @@ s_{\text{mat}} = 1 - e^{-A}, \qquad
 \dfrac{s_{\text{mat}} - s_0}{1 - s_0} & s_{\text{mat}} > s_0 \\
 0 & \text{otherwise}
 \end{cases}
-$$
+```
 
 $s_0$ = `material_los_max_severity` is the material analogue of $\tau_{\text{LOS}}$; re-zeroing at it keeps the term continuous where a link turns NLOS. Because $\lambda_m$ spans four orders of magnitude (0.5 mm for metal, 20 m for foam) while chord lengths typically span one, *which* material is crossed changes the severity far more than *how much* of it -- which is what makes material the dominant factor.
 
 **Material bias** -- tagged materials also delay the first path deterministically. A dielectric slows the signal to $c/\sqrt{\varepsilon_r}$ ($\varepsilon_{r,m}$ = `material_<m>_permittivity`); a conductor isn't penetrated, so the first path detours around it instead ($\beta_{\text{metal}}$ = `material_metal_detour_bias_cm`, added once per link however many metal obstacles it crosses):
 
-$$
-\beta = \sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right) \;+\; \beta_{\text{metal}} \cdot \mathbb{1}[\ell_{\text{metal}} > 0]
-$$
+```math
+\beta = \sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right)  +  \beta_{\text{metal}} \cdot \mathbf{1}[\ell_{\text{metal}} > 0]
+```
 
 ### Noise standard deviation and dropout probability
 
 A link is **NLOS** if $\tau > \tau_{\text{LOS}}$ or $s_{\text{mat}} > s_0$, and **LOS** otherwise. Then, separately for noise ($\sigma$) and dropout ($p$):
 
-$$
+```math
 s =
 \begin{cases}
 s_d & \text{LOS} \\
-s_d \;\oplus\; \min\!\big(1,\ g_\tau\, s_\tau(\tau)\big) \;\oplus\; \min\!\big(1,\ g_{\text{mat}}\, \bar s_{\text{mat}}\big) & \text{NLOS}
+s_d  \oplus  \min\big(1, g_\tau s_\tau(\tau)\big)  \oplus  \min\big(1, g_{\text{mat}} \bar s_{\text{mat}}\big) & \text{NLOS}
 \end{cases}
 \qquad
-\sigma = E\big(s^{\sigma};\ \sigma_{\min}, \sigma_{\max}\big), \qquad
-p = E\big(s^{p};\ p_{\min}, p_{\max}\big)
-$$
+\sigma = E\big(s^{\sigma}; \sigma_{\min}, \sigma_{\max}\big), \qquad
+p = E\big(s^{p}; p_{\min}, p_{\max}\big)
+```
 
 - $\sigma_{\min}, \sigma_{\max}$ = `min_noise_stddev_cm`, `max_noise_stddev_cm`; $p_{\min}, p_{\max}$ = `min_dropout_probability`, `max_dropout_probability`.
 - $g_\tau = 1 + w_\tau$, with $w_\tau$ = `nlos_stddev_thickness_extra_weight` / `nlos_dropout_thickness_extra_weight` in $[0, 1]$.
@@ -194,40 +194,40 @@ $\oplus$ is symmetric, so the order of influence comes from the gains and scales
 
 For anchor $j$ and tag $t$, the ground truth $d_{jt}$ is always published. With probability $p$ no simulated range is published that cycle; otherwise
 
-$$
-\tilde r_{jt} = \max\!\big(0,\ d_{jt} + \tilde n + \beta + b_{jt}\big), \qquad
+```math
+\tilde r_{jt} = \max\big(0, d_{jt} + \tilde n + \beta + b_{jt}\big), \qquad
 n \sim \mathcal{N}(\mu, \sigma^2), \qquad
 \tilde n =
 \begin{cases}
 -n & \text{NLOS and } n < 0 \\
 n & \text{otherwise}
 \end{cases}
-$$
+```
 
 - $\mu$ = `gaussian_noise_mean_cm`.
 - $b_{jt} \sim \mathcal{U}(b_{\min}, b_{\max})$, with $b_{\min}, b_{\max}$ = `bias_min_cm`, `bias_max_cm`, is drawn once per pair and kept for the whole run when `apply_pair_bias` is on (0 otherwise).
-- Folding $n$ in NLOS models the first path arriving late, never early: for $\mu = 0$ it adds a mean of $\sigma\sqrt{2/\pi} \approx 0.8\,\sigma$ that grows with severity, on top of the deterministic $\beta$.
+- Folding $n$ in NLOS models the first path arriving late, never early: for $\mu = 0$ it adds a mean of $\sigma\sqrt{2/\pi} \approx 0.8\sigma$ that grows with severity, on top of the deterministic $\beta$.
 
 ### TDOA measurement
 
 The reference anchor $i$ is the one with the lowest numeric id. Each leg $k$ (tag to anchor $k$) is evaluated as a link of its own, with error
 
-$$
+```math
 e_k = \tilde n_k + \beta_k + b_k, \qquad b_k \sim \mathcal{U}(b_{\min}, b_{\max}) \text{ once per anchor}
-$$
+```
 
 ($\tilde n_k$ folded in NLOS as above). For every other anchor $j$, the ground truth (Zhao et al. 2023, Eq. 1) and the measurement are
 
-$$
+```math
 d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \mathbf{a}_i \rVert, \qquad
 \tilde d_{ij} = d_{ij} + e_j - e_i .
-$$
+```
 
 - **The reference leg is shared.** $e_i$ is drawn once per tag per cycle and enters every $\tilde d_{ij}$ of that tag. If the reference leg drops out (probability $p_i$), all of that tag's TDOA values are lost that cycle; otherwise each $\tilde d_{ij}$ is additionally lost with probability $p_j$. Marginally, $P(\text{lost}) = 1 - (1 - p_i)(1 - p_j)$.
-- **Errors are correlated across pairs**, as on real TDOA hardware: $\operatorname{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \operatorname{Var}(e_i)$, a correlation of 0.5 when all legs have equal $\sigma$.
+- **Errors are correlated across pairs**, as on real TDOA hardware: $\mathrm{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \mathrm{Var}(e_i)$, a correlation of 0.5 when all legs have equal $\sigma$.
 - **NLOS errors keep their sign.** NLOS on anchor $j$'s leg pushes $\tilde d_{ij}$ up; NLOS on the reference leg pulls *every* $\tilde d_{ij}$ of that tag down.
 - $\mu$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($b_j - b_i$), not per pair.
-- For LOS legs, $\operatorname{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2$, which is why `util_identification` derives its per-link $\sigma$ as the measured TDOA spread divided by $\sqrt{2}$. Both modes share the same per-link model, so switching modes needs no recalibration.
+- For LOS legs, $\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2$, which is why `util_identification` derives its per-link $\sigma$ as the measured TDOA spread divided by $\sqrt{2}$. Both modes share the same per-link model, so switching modes needs no recalibration.
 
 ### Material table
 
