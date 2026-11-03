@@ -76,13 +76,13 @@ If you are unsure whether your PX4/ROS 2/Gazebo setup is healthy, it is worth fi
 
 ## Measurement model
 
-The `UWBGazeboPlugin` system simulates UWB measurements between UGV anchors and UAV tags. Every 100 ms of simulation time it evaluates each tag-anchor **link** -- its geometry, its LOS/NLOS regime, and from those a noise standard deviation $\sigma$ and a dropout probability $p$ -- and then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Degradation follows one rule of thumb, in decreasing order of influence:
+The `UWBGazeboPlugin` system simulates UWB measurements between UGV anchors and UAV tags. Every 100 ms of simulation time it evaluates each tag-anchor **link** -- its geometry, its LOS/NLOS regime, and from those a noise standard deviation $`\sigma`$ and a dropout probability $`p`$ -- and then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Degradation follows one rule of thumb, in decreasing order of influence:
 
 | Regime | What degrades the link |
 | --- | --- |
 | LOS | distance only |
-| NLOS, untagged obstacles | blocked thickness $>$ distance |
-| NLOS, material-tagged obstacles | material $>$ thickness $>$ distance |
+| NLOS, untagged obstacles | blocked thickness $`>`$ distance |
+| NLOS, material-tagged obstacles | material $`>`$ thickness $`>`$ distance |
 
 Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The two shipped presets, `eliko_identification` (Eliko TWR baseline, the default under `-y`) and `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset), are read-only from the GUI: tune one and save it under a new name.
 
@@ -95,17 +95,17 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 
 ### Link geometry
 
-For a tag at $\mathbf{p}_t$ and an anchor at $\mathbf{a}$, the true range is $d = \lVert \mathbf{p}_t - \mathbf{a} \rVert$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with the world-axis-aligned bounding box (AABB) of every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles. Chord lengths are merged within each group, so overlapping links of one wall aren't counted twice:
+For a tag at $`\mathbf{p}_t`$ and an anchor at $`\mathbf{a}`$, the true range is $`d = \lVert \mathbf{p}_t - \mathbf{a} \rVert`$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with the world-axis-aligned bounding box (AABB) of every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles. Chord lengths are merged within each group, so overlapping links of one wall aren't counted twice:
 
-- $\tau_{\text{wall}}$ -- chord length through untagged obstacles.
-- $\ell_m$ -- chord length through obstacles of material $m$. With `enable_material_attenuation: true`, an obstacle is tagged by a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`; known materials are listed in the [Material table](#material-table), and an unknown name logs a warning once and counts as untagged. With the material model off, every obstacle is untagged.
-- $\tau_{\text{body}}$ -- chord length through the vehicles' `base_link`s, converted to an equivalent thickness that can't on its own exceed Soft NLOS: $\tau_{\text{body}}^{\text{eq}} = 0$ if $\tau_{\text{body}} \le \tau_{\text{LOS}}$, else $\min(\tau_{\text{body}}, \tau_{\text{soft}})$.
+- $`\tau_{\text{wall}}`$ -- chord length through untagged obstacles.
+- $`\ell_m`$ -- chord length through obstacles of material $`m`$. With `enable_material_attenuation: true`, an obstacle is tagged by a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`; known materials are listed in the [Material table](#material-table), and an unknown name logs a warning once and counts as untagged. With the material model off, every obstacle is untagged.
+- $`\tau_{\text{body}}`$ -- chord length through the vehicles' `base_link`s, converted to an equivalent thickness that can't on its own exceed Soft NLOS: $`\tau_{\text{body}}^{\text{eq}} = 0`$ if $`\tau_{\text{body}} \le \tau_{\text{LOS}}`$, else $`\min(\tau_{\text{body}}, \tau_{\text{soft}})`$.
 
-The blocked thickness used by the generic curve is $\tau = \tau_{\text{wall}} + \tau_{\text{body}}^{\text{eq}}$.
+The blocked thickness used by the generic curve is $`\tau = \tau_{\text{wall}} + \tau_{\text{body}}^{\text{eq}}`$.
 
 ### Severities
 
-Each degradation factor is mapped to a severity in $[0, 1]$, using
+Each degradation factor is mapped to a severity in $`[0, 1]`$, using
 
 ```math
 \mathrm{ramp}(x; a, b) = \mathrm{clamp}\left(\frac{x - a}{b - a}, 0, 1\right), \qquad
@@ -113,16 +113,16 @@ E(s; y_0, y_1) = y_0 \left(\frac{y_1}{y_0}\right)^{s}, \qquad
 a \oplus b = a + (1 - a) b = 1 - (1 - a)(1 - b).
 ```
 
-$E$ maps a severity onto a parameter range exponentially; $\oplus$ combines two severities so that each only fills the headroom the other leaves (no early saturation).
+$`E`$ maps a severity onto a parameter range exponentially; $`\oplus`$ combines two severities so that each only fills the headroom the other leaves (no early saturation).
 
-**Distance**, with separate ramps for noise ($d^{\sigma}_{0,1}$ = `los_stddev_start_distance_m`, `los_stddev_end_distance_m`) and dropout ($d^{p}_{0,1}$ = `los_dropout_start_distance_m`, `los_dropout_end_distance_m`):
+**Distance**, with separate ramps for noise ($`d^{\sigma}_{0,1}`$ = `los_stddev_start_distance_m`, `los_stddev_end_distance_m`) and dropout ($`d^{p}_{0,1}`$ = `los_dropout_start_distance_m`, `los_dropout_end_distance_m`):
 
 ```math
 s_d^{\sigma} = \mathrm{ramp}(d; d^{\sigma}_0, d^{\sigma}_1), \qquad
 s_d^{p} = \mathrm{ramp}(d; d^{p}_0, d^{p}_1)
 ```
 
-**Thickness** -- piecewise linear between $\tau_{\text{LOS}}$ = `los_max_thickness_m`, $\tau_{\text{soft}}$ = `soft_nlos_max_thickness_m` and $\tau_{\text{blk}}$ = `blackout_thickness_m`, with the Hard-NLOS segment steeper by $1 + r$ ($r$ = `hard_nlos_gap_ratio`, `0` = same slope, `1` = double):
+**Thickness** -- piecewise linear between $`\tau_{\text{LOS}}`$ = `los_max_thickness_m`, $`\tau_{\text{soft}}`$ = `soft_nlos_max_thickness_m` and $`\tau_{\text{blk}}`$ = `blackout_thickness_m`, with the Hard-NLOS segment steeper by $`1 + r`$ ($`r`$ = `hard_nlos_gap_ratio`, `0` = same slope, `1` = double):
 
 ```math
 s_\tau(\tau) =
@@ -136,7 +136,7 @@ k(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)k(\tau - \tau_{\text{soft}}) 
 k = \frac{1}{(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)(\tau_{\text{blk}} - \tau_{\text{soft}})}
 ```
 
-**Material** -- Beer-Lambert attenuation, with a per-material penetration length $\lambda_m$ = `material_<m>_penetration_m`:
+**Material** -- Beer-Lambert attenuation, with a per-material penetration length $`\lambda_m`$ = `material_<m>_penetration_m`:
 
 ```math
 A = \sum_m \frac{\ell_m}{\lambda_m}, \qquad
@@ -148,9 +148,9 @@ s_{\text{mat}} = 1 - e^{-A}, \qquad
 \end{cases}
 ```
 
-$s_0$ = `material_los_max_severity` is the material analogue of $\tau_{\text{LOS}}$; re-zeroing at it keeps the term continuous where a link turns NLOS. Because $\lambda_m$ spans four orders of magnitude (0.5 mm for metal, 20 m for foam) while chord lengths typically span one, *which* material is crossed changes the severity far more than *how much* of it -- which is what makes material the dominant factor.
+$`s_0`$ = `material_los_max_severity` is the material analogue of $`\tau_{\text{LOS}}`$; re-zeroing at it keeps the term continuous where a link turns NLOS. Because $`\lambda_m`$ spans four orders of magnitude (0.5 mm for metal, 20 m for foam) while chord lengths typically span one, *which* material is crossed changes the severity far more than *how much* of it -- which is what makes material the dominant factor.
 
-**Material bias** -- tagged materials also delay the first path deterministically. A dielectric slows the signal to $c/\sqrt{\varepsilon_r}$ ($\varepsilon_{r,m}$ = `material_<m>_permittivity`); a conductor isn't penetrated, so the first path detours around it instead ($\beta_{\text{metal}}$ = `material_metal_detour_bias_cm`, added once per link however many metal obstacles it crosses):
+**Material bias** -- tagged materials also delay the first path deterministically. A dielectric slows the signal to $`c/\sqrt{\varepsilon_r}`$ ($`\varepsilon_{r,m}`$ = `material_<m>_permittivity`); a conductor isn't penetrated, so the first path detours around it instead ($`\beta_{\text{metal}}`$ = `material_metal_detour_bias_cm`, added once per link however many metal obstacles it crosses):
 
 ```math
 \beta = \sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right)  +  \beta_{\text{metal}} \cdot \mathbf{1}[\ell_{\text{metal}} > 0]
@@ -158,7 +158,7 @@ $s_0$ = `material_los_max_severity` is the material analogue of $\tau_{\text{LOS
 
 ### Noise standard deviation and dropout probability
 
-A link is **NLOS** if $\tau > \tau_{\text{LOS}}$ or $s_{\text{mat}} > s_0$, and **LOS** otherwise. Then, separately for noise ($\sigma$) and dropout ($p$):
+A link is **NLOS** if $`\tau > \tau_{\text{LOS}}`$ or $`s_{\text{mat}} > s_0`$, and **LOS** otherwise. Then, separately for noise ($`\sigma`$) and dropout ($`p`$):
 
 ```math
 s =
@@ -171,18 +171,18 @@ s_d  \oplus  \min\big(1, g_\tau s_\tau(\tau)\big)  \oplus  \min\big(1, g_{\text{
 p = E\big(s^{p}; p_{\min}, p_{\max}\big)
 ```
 
-- $\sigma_{\min}, \sigma_{\max}$ = `min_noise_stddev_cm`, `max_noise_stddev_cm`; $p_{\min}, p_{\max}$ = `min_dropout_probability`, `max_dropout_probability`.
-- $g_\tau = 1 + w_\tau$, with $w_\tau$ = `nlos_stddev_thickness_extra_weight` / `nlos_dropout_thickness_extra_weight` in $[0, 1]$.
-- $g_{\text{mat}} = 1 + w_{\text{mat}}$, with $w_{\text{mat}}$ = `nlos_stddev_material_extra_weight` / `nlos_dropout_material_extra_weight` in $[0, 2]$, raised to at least $w_\tau$ if set lower. Without the material model this term is 0, which is exactly the thickness-only model.
-- **Blackout** -- $\tau \ge \tau_{\text{blk}}$: $\sigma = \sigma_{\max}$ and $p = 1$. **Out of range** -- $d >$ `los_hard_dropout_distance_m`: $p = 1$.
-- With `enable_nlos_dropout: false`, dropout ignores obstacles ($s^p = s_d^p$, no blackout); noise still uses the full model.
+- $`\sigma_{\min}, \sigma_{\max}`$ = `min_noise_stddev_cm`, `max_noise_stddev_cm`; $`p_{\min}, p_{\max}`$ = `min_dropout_probability`, `max_dropout_probability`.
+- $`g_\tau = 1 + w_\tau`$, with $`w_\tau`$ = `nlos_stddev_thickness_extra_weight` / `nlos_dropout_thickness_extra_weight` in $`[0, 1]`$.
+- $`g_{\text{mat}} = 1 + w_{\text{mat}}`$, with $`w_{\text{mat}}`$ = `nlos_stddev_material_extra_weight` / `nlos_dropout_material_extra_weight` in $`[0, 2]`$, raised to at least $`w_\tau`$ if set lower. Without the material model this term is 0, which is exactly the thickness-only model.
+- **Blackout** -- $`\tau \ge \tau_{\text{blk}}`$: $`\sigma = \sigma_{\max}`$ and $`p = 1`$. **Out of range** -- $`d >`$ `los_hard_dropout_distance_m`: $`p = 1`$.
+- With `enable_nlos_dropout: false`, dropout ignores obstacles ($`s^p = s_d^p`$, no blackout); noise still uses the full model.
 
-$\oplus$ is symmetric, so the order of influence comes from the gains and scales: distance has gain 1 and its default ramps only start at 10-15 m, so indoors it barely matters once a link is NLOS; thickness has gain $g_\tau = 1.5$ over roughly a metre of obstacle; material has gain $g_{\text{mat}} = 2$ and the $\lambda_m$ spread above. Some resulting values, with `eliko_identification`, the material model on and $d = 5$ m:
+$`\oplus`$ is symmetric, so the order of influence comes from the gains and scales: distance has gain 1 and its default ramps only start at 10-15 m, so indoors it barely matters once a link is NLOS; thickness has gain $`g_\tau = 1.5`$ over roughly a metre of obstacle; material has gain $`g_{\text{mat}} = 2`$ and the $`\lambda_m`$ spread above. Some resulting values, with `eliko_identification`, the material model on and $`d = 5`$ m:
 
-| Link | Regime | $\sigma$ (cm) | $p$ | $\beta$ (cm) |
+| Link | Regime | $`\sigma`$ (cm) | $`p`$ | $`\beta`$ (cm) |
 | --- | --- | ---: | ---: | ---: |
-| LOS / at $d = 40$ m | LOS | 12.0 / 21.7 | 0.020 / 0.134 | 0 |
-| untagged 0.3 m / at $d = 40$ m | NLOS | 16.8 / 26.5 | 0.049 / 0.210 | 0 |
+| LOS / at $`d = 40`$ m | LOS | 12.0 / 21.7 | 0.020 / 0.134 | 0 |
+| untagged 0.3 m / at $`d = 40`$ m | NLOS | 16.8 / 26.5 | 0.049 / 0.210 | 0 |
 | untagged 0.7 m | NLOS | 42.3 | 0.575 | 0 |
 | foam 0.3 m, cardboard 0.3 m, wood 0.03 m | LOS | 12.0 | 0.020 | 0.7, 2.9, 1.2 |
 | wood 0.3 m | NLOS | 15.7 | 0.041 | 12.4 |
@@ -192,7 +192,7 @@ $\oplus$ is symmetric, so the order of influence comes from the gains and scales
 
 ### TWR measurement
 
-For anchor $j$ and tag $t$, the ground truth $d_{jt}$ is always published. With probability $p$ no simulated range is published that cycle; otherwise
+For anchor $`j`$ and tag $`t`$, the ground truth $`d_{jt}`$ is always published. With probability $`p`$ no simulated range is published that cycle; otherwise
 
 ```math
 \tilde r_{jt} = \max\big(0, d_{jt} + \tilde n + \beta + b_{jt}\big), \qquad
@@ -204,36 +204,36 @@ n & \text{otherwise}
 \end{cases}
 ```
 
-- $\mu$ = `gaussian_noise_mean_cm`.
-- $b_{jt} \sim \mathcal{U}(b_{\min}, b_{\max})$, with $b_{\min}, b_{\max}$ = `bias_min_cm`, `bias_max_cm`, is drawn once per pair and kept for the whole run when `apply_pair_bias` is on (0 otherwise).
-- Folding $n$ in NLOS models the first path arriving late, never early: for $\mu = 0$ it adds a mean of $\sigma\sqrt{2/\pi} \approx 0.8\sigma$ that grows with severity, on top of the deterministic $\beta$.
+- $`\mu`$ = `gaussian_noise_mean_cm`.
+- $`b_{jt} \sim \mathcal{U}(b_{\min}, b_{\max})`$, with $`b_{\min}, b_{\max}`$ = `bias_min_cm`, `bias_max_cm`, is drawn once per pair and kept for the whole run when `apply_pair_bias` is on (0 otherwise).
+- Folding $`n`$ in NLOS models the first path arriving late, never early: for $`\mu = 0`$ it adds a mean of $`\sigma\sqrt{2/\pi} \approx 0.8\sigma`$ that grows with severity, on top of the deterministic $`\beta`$.
 
 ### TDOA measurement
 
-The reference anchor $i$ is the one with the lowest numeric id. Each leg $k$ (tag to anchor $k$) is evaluated as a link of its own, with error
+The reference anchor $`i`$ is the one with the lowest numeric id. Each leg $`k`$ (tag to anchor $`k`$) is evaluated as a link of its own, with error
 
 ```math
 e_k = \tilde n_k + \beta_k + b_k, \qquad b_k \sim \mathcal{U}(b_{\min}, b_{\max}) \text{ once per anchor}
 ```
 
-($\tilde n_k$ folded in NLOS as above). For every other anchor $j$, the ground truth (Zhao et al. 2023, Eq. 1) and the measurement are
+($`\tilde n_k`$ folded in NLOS as above). For every other anchor $`j`$, the ground truth (Zhao et al. 2023, Eq. 1) and the measurement are
 
 ```math
 d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \mathbf{a}_i \rVert, \qquad
 \tilde d_{ij} = d_{ij} + e_j - e_i .
 ```
 
-- **The reference leg is shared.** $e_i$ is drawn once per tag per cycle and enters every $\tilde d_{ij}$ of that tag. If the reference leg drops out (probability $p_i$), all of that tag's TDOA values are lost that cycle; otherwise each $\tilde d_{ij}$ is additionally lost with probability $p_j$. Marginally, $P(\text{lost}) = 1 - (1 - p_i)(1 - p_j)$.
-- **Errors are correlated across pairs**, as on real TDOA hardware: $\mathrm{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \mathrm{Var}(e_i)$, a correlation of 0.5 when all legs have equal $\sigma$.
-- **NLOS errors keep their sign.** NLOS on anchor $j$'s leg pushes $\tilde d_{ij}$ up; NLOS on the reference leg pulls *every* $\tilde d_{ij}$ of that tag down.
-- $\mu$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($b_j - b_i$), not per pair.
-- For LOS legs, $\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2$, which is why `util_identification` derives its per-link $\sigma$ as the measured TDOA spread divided by $\sqrt{2}$. Both modes share the same per-link model, so switching modes needs no recalibration.
+- **The reference leg is shared.** $`e_i`$ is drawn once per tag per cycle and enters every $`\tilde d_{ij}`$ of that tag. If the reference leg drops out (probability $`p_i`$), all of that tag's TDOA values are lost that cycle; otherwise each $`\tilde d_{ij}`$ is additionally lost with probability $`p_j`$. Marginally, $`P(\text{lost}) = 1 - (1 - p_i)(1 - p_j)`$.
+- **Errors are correlated across pairs**, as on real TDOA hardware: $`\mathrm{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \mathrm{Var}(e_i)`$, a correlation of 0.5 when all legs have equal $`\sigma`$.
+- **NLOS errors keep their sign.** NLOS on anchor $`j`$'s leg pushes $`\tilde d_{ij}`$ up; NLOS on the reference leg pulls *every* $`\tilde d_{ij}`$ of that tag down.
+- $`\mu`$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($`b_j - b_i`$), not per pair.
+- For LOS legs, $`\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2`$, which is why `util_identification` derives its per-link $`\sigma`$ as the measured TDOA spread divided by $`\sqrt{2}`$. Both modes share the same per-link model, so switching modes needs no recalibration.
 
 ### Material table
 
-| Material | $\lambda$ (m) | $\varepsilon_r$ | Behaviour |
+| Material | $`\lambda`$ (m) | $`\varepsilon_r`$ | Behaviour |
 | --- | ---: | ---: | --- |
-| `metal` | 0.0005 | -- (conductor) | Any sheet saturates the material term; fixed detour bias $\beta_{\text{metal}}$ |
+| `metal` | 0.0005 | -- (conductor) | Any sheet saturates the material term; fixed detour bias $`\beta_{\text{metal}}`$ |
 | `concrete` | 0.5 | 5.0 | A 20 cm wall: clear NLOS, about 25 cm bias |
 | `glass` | 0.5 | 6.0 | Window panes stay LOS; thick glass degrades like concrete, with a larger bias |
 | `plastic` | 1.0 | 2.5 | Moderate |
@@ -241,7 +241,7 @@ d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \math
 | `cardboard` | 10.0 | 1.2 | Near-LOS |
 | `foam` | 20.0 | 1.05 | Effectively transparent |
 
-The $\varepsilon_r$ values for concrete, glass and wood are close to the ITU-R P.2040 values for building materials at a few GHz; cardboard and foam are mostly air, so their effective $\varepsilon_r$ is close to 1. The $\lambda$ values aren't measured: they're chosen to reproduce the qualitative ordering of UTIL's NLOS material tests (cardboard, foam and wood close to LOS, plastic worse, metal severe), and the metal detour bias and wood permittivity match UTIL's metal (-34 cm) and wooden-shelf (-15.8 cm) shifts in magnitude. Treat them as a starting point to tune.
+The $`\varepsilon_r`$ values for concrete, glass and wood are close to the ITU-R P.2040 values for building materials at a few GHz; cardboard and foam are mostly air, so their effective $`\varepsilon_r`$ is close to 1. The $`\lambda`$ values aren't measured: they're chosen to reproduce the qualitative ordering of UTIL's NLOS material tests (cardboard, foam and wood close to LOS, plastic worse, metal severe), and the metal detour bias and wood permittivity match UTIL's metal (-34 cm) and wooden-shelf (-15.8 cm) shifts in magnitude. Treat them as a starting point to tune.
 
 ### Limitations
 
@@ -264,29 +264,29 @@ The $\varepsilon_r$ values for concrete, glass and wood are close to the ITU-R P
 | **Geometry** | | |
 | `nlos_endpoint_margin_m` | ignored length at each segment end | `0.02` |
 | **Distance** | | |
-| `los_stddev_start_distance_m`, `los_stddev_end_distance_m` | $d^{\sigma}_0$, $d^{\sigma}_1$ | `15.0`, `75.0` |
-| `los_dropout_start_distance_m`, `los_dropout_end_distance_m` | $d^{p}_0$, $d^{p}_1$ | `10.0`, `70.0` |
+| `los_stddev_start_distance_m`, `los_stddev_end_distance_m` | $`d^{\sigma}_0`$, $`d^{\sigma}_1`$ | `15.0`, `75.0` |
+| `los_dropout_start_distance_m`, `los_dropout_end_distance_m` | $`d^{p}_0`$, $`d^{p}_1`$ | `10.0`, `70.0` |
 | `los_hard_dropout_distance_m` | out-of-range distance | `75.0` |
 | **Thickness** | | |
-| `los_max_thickness_m` | $\tau_{\text{LOS}}$ | `0.10` |
-| `soft_nlos_max_thickness_m` | $\tau_{\text{soft}}$ | `0.50` |
-| `blackout_thickness_m` | $\tau_{\text{blk}}$ | `1.0` |
-| `hard_nlos_gap_ratio` | $r$ | `0.50` |
-| `nlos_stddev_thickness_extra_weight`, `nlos_dropout_thickness_extra_weight` | $w_\tau$ | `0.50`, `0.50` |
+| `los_max_thickness_m` | $`\tau_{\text{LOS}}`$ | `0.10` |
+| `soft_nlos_max_thickness_m` | $`\tau_{\text{soft}}`$ | `0.50` |
+| `blackout_thickness_m` | $`\tau_{\text{blk}}`$ | `1.0` |
+| `hard_nlos_gap_ratio` | $`r`$ | `0.50` |
+| `nlos_stddev_thickness_extra_weight`, `nlos_dropout_thickness_extra_weight` | $`w_\tau`$ | `0.50`, `0.50` |
 | `enable_nlos_dropout` | obstacles affect dropout | `true` |
 | **Materials** | | |
 | `enable_material_attenuation` | material model on/off | `false` |
-| `material_los_max_severity` | $s_0$ | `0.05` |
-| `nlos_stddev_material_extra_weight`, `nlos_dropout_material_extra_weight` | $w_{\text{mat}}$ | `1.0`, `1.0` |
-| `material_<name>_penetration_m` | $\lambda_m$ | [Material table](#material-table) |
-| `material_<name>_permittivity` | $\varepsilon_{r,m}$ (not for `metal`) | [Material table](#material-table) |
-| `material_metal_detour_bias_cm` | $\beta_{\text{metal}}$ | `35.0` |
+| `material_los_max_severity` | $`s_0`$ | `0.05` |
+| `nlos_stddev_material_extra_weight`, `nlos_dropout_material_extra_weight` | $`w_{\text{mat}}`$ | `1.0`, `1.0` |
+| `material_<name>_penetration_m` | $`\lambda_m`$ | [Material table](#material-table) |
+| `material_<name>_permittivity` | $`\varepsilon_{r,m}`$ (not for `metal`) | [Material table](#material-table) |
+| `material_metal_detour_bias_cm` | $`\beta_{\text{metal}}`$ | `35.0` |
 | **Noise and dropout** | | |
-| `min_noise_stddev_cm`, `max_noise_stddev_cm` | $\sigma_{\min}$, $\sigma_{\max}$ | `12.0`, `50.0` |
-| `min_dropout_probability`, `max_dropout_probability` | $p_{\min}$, $p_{\max}$ | `0.02`, `0.90` |
-| `gaussian_noise_mean_cm` | $\mu$ | `0.0` |
+| `min_noise_stddev_cm`, `max_noise_stddev_cm` | $`\sigma_{\min}`$, $`\sigma_{\max}`$ | `12.0`, `50.0` |
+| `min_dropout_probability`, `max_dropout_probability` | $`p_{\min}`$, $`p_{\max}`$ | `0.02`, `0.90` |
+| `gaussian_noise_mean_cm` | $`\mu`$ | `0.0` |
 | `apply_pair_bias` | persistent bias on/off | `false` |
-| `bias_min_cm`, `bias_max_cm` | $b_{\min}$, $b_{\max}$ | `-27.0`, `20.0` |
+| `bias_min_cm`, `bias_max_cm` | $`b_{\min}`$, $`b_{\max}`$ | `-27.0`, `20.0` |
 
 ## Quick start: automated setup
 
