@@ -139,77 +139,52 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
 
     # (group label, [(key, default)]) -- defines both the canonical write
     # order/section comments for a rendered preset file and the ordered
-    # param list the frontend renders. Keep in sync with the "Plugin
-    # parameters" table in README.md if either changes.
+    # param list the frontend renders. Keep in sync with the "Parameter
+    # reference" table in README.md if either changes. Per-material
+    # material_<name>_attenuation_db_per_m / _permittivity overrides are
+    # deliberately not listed: every listed key is written into a saved
+    # preset, which would freeze the rates the plugin otherwise derives from
+    # carrier_frequency_ghz. Add them to a preset by hand when needed.
     PARAM_GROUPS: list[tuple[str, list[tuple[str, Any]]]] = [
-        ("Base GZ topics for simulated / ground-truth ranges.", [
+        ("Ranging mode and topics.", [
+            ("uwb_mode", "twr"),
             ("topic", "/uwb_gz_simulator/distances"),
             ("ground_truth_topic", "/uwb_gz_simulator/distances_ground_truth"),
-        ]),
-        ("Additive Gaussian noise mean.", [
-            ("gaussian_noise_mean_cm", 0.0),
-        ]),
-        ("Persistent per-pair bias.", [
-            ("apply_pair_bias", False),
-            ("bias_min_cm", -27.0),
-            ("bias_max_cm", 20.0),
-        ]),
-        ("NLOS-aware degradation.", [
-            ("enable_nlos_dropout", True),
-            ("nlos_endpoint_margin_m", 0.02),
-        ]),
-        ("LOS distance-based dropout curve.", [
-            ("los_dropout_start_distance_m", 10.0),
-            ("los_dropout_end_distance_m", 70.0),
-            ("los_hard_dropout_distance_m", 75.0),
-        ]),
-        ("Blocked-thickness thresholds.", [
-            ("los_max_thickness_m", 0.10),
-            ("soft_nlos_max_thickness_m", 0.50),
-            ("blackout_thickness_m", 1.0),
-            ("hard_nlos_gap_ratio", 0.50),
-        ]),
-        ("Dropout probability bounds.", [
-            ("min_dropout_probability", 0.02),
-            ("max_dropout_probability", 0.90),
-        ]),
-        ("Noise standard-deviation curve.", [
-            ("min_noise_stddev_cm", 12.0),
-            ("max_noise_stddev_cm", 50.0),
-            ("los_stddev_start_distance_m", 15.0),
-            ("los_stddev_end_distance_m", 75.0),
-        ]),
-        ("Extra weight given to blocked thickness vs. distance.", [
-            ("nlos_dropout_thickness_extra_weight", 0.50),
-            ("nlos_stddev_thickness_extra_weight", 0.50),
-        ]),
-        ("Ranging mode.", [
-            ("uwb_mode", "twr"),
             ("tdoa_topic", "/uwb_gz_simulator/tdoa"),
             ("tdoa_ground_truth_topic", "/uwb_gz_simulator/tdoa_ground_truth"),
         ]),
-        ("Material-aware NLOS model (obstacles named *__material_<name>).", [
+        ("Link budget (dB; with n = 2, 23.5 dB = 15 m and 37.5 dB = 75 m).", [
+            ("path_loss_exponent", 2.0),
+            ("max_link_loss_db", 37.5),
+        ]),
+        ("Noise standard deviation vs. loss.", [
+            ("min_noise_stddev_cm", 12.0),
+            ("max_noise_stddev_cm", 50.0),
+            ("noise_start_loss_db", 23.5),
+            ("noise_end_loss_db", 37.5),
+        ]),
+        ("Dropout vs. loss.", [
+            ("min_dropout_probability", 0.02),
+            ("dropout_mid_loss_db", 35.5),
+            ("dropout_width_db", 1.4),
+            ("enable_nlos_dropout", True),
+        ]),
+        ("Obstacles.", [
+            ("nlos_endpoint_margin_m", 0.02),
+            ("nlos_min_loss_db", 3.0),
+            ("body_shadow_max_loss_db", 10.0),
+        ]),
+        ("Materials (obstacles named *__material_<name>).", [
             ("enable_material_attenuation", False),
-            ("material_los_max_severity", 0.05),
-            ("nlos_dropout_material_extra_weight", 1.0),
-            ("nlos_stddev_material_extra_weight", 1.0),
+            ("carrier_frequency_ghz", 6.5),
+            ("material_metal_detour_loss_db", 20.0),
             ("material_metal_detour_bias_cm", 35.0),
         ]),
-        # Keep in sync with defaultMaterials() in UWBGazeboSystem.cpp.
-        ("Material penetration length lambda (m) and relative permittivity eps_r.", [
-            ("material_metal_penetration_m", 0.0005),
-            ("material_concrete_penetration_m", 0.5),
-            ("material_concrete_permittivity", 5.0),
-            ("material_glass_penetration_m", 0.5),
-            ("material_glass_permittivity", 6.0),
-            ("material_wood_penetration_m", 2.0),
-            ("material_wood_permittivity", 2.0),
-            ("material_plastic_penetration_m", 1.0),
-            ("material_plastic_permittivity", 2.5),
-            ("material_cardboard_penetration_m", 10.0),
-            ("material_cardboard_permittivity", 1.2),
-            ("material_foam_penetration_m", 20.0),
-            ("material_foam_permittivity", 1.05),
+        ("Additive noise mean and persistent bias.", [
+            ("gaussian_noise_mean_cm", 0.0),
+            ("apply_pair_bias", False),
+            ("bias_min_cm", -27.0),
+            ("bias_max_cm", 20.0),
         ]),
     ]
     PARAM_DEFAULTS = {k: v for _label, kv in PARAM_GROUPS for k, v in kv}
@@ -224,17 +199,22 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             "# PX4's server.config on every run.",
             "",
         ]
+        def fmt(value: Any) -> str:
+            if isinstance(value, bool):
+                return "true" if value else "false"
+            return str(value)
+
         for label, kv in PARAM_GROUPS:
             lines.append(f"# {label}")
             for key, default in kv:
-                value = values.get(key, default)
-                if isinstance(value, bool):
-                    text = "true" if value else "false"
-                elif isinstance(value, str):
-                    text = value
-                else:
-                    text = str(value)
-                lines.append(f"{key}: {text}")
+                lines.append(f"{key}: {fmt(values.get(key, default))}")
+            lines.append("")
+        # Keys the GUI doesn't render (e.g. hand-added material_<name>_*
+        # overrides) are kept as-is rather than dropped on save.
+        extra = [k for k in values if k not in PARAM_DEFAULTS]
+        if extra:
+            lines.append("# Other parameters (not editable in the GUI).")
+            lines.extend(f"{key}: {fmt(values[key])}" for key in extra)
             lines.append("")
         return "\n".join(lines).rstrip() + "\n"
 

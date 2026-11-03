@@ -1,76 +1,63 @@
 # UWBGazeboSystem plugin parameters -- "eliko_identification" preset.
 #
 # Calibrated from the author's own identification dataset collected with a
-# real Eliko UWB system (TWR hardware) -- analogous in spirit to how
-# presets/util_identification.yaml is calibrated from the published UTIL
-# dataset (DWM1000/Bitcraze LPS, TDOA), just a different, privately-run
-# identification campaign on different hardware. hard_nlos_gap_ratio is
-# kept at 0.75 (compiled-in default is 0.50) to match that tuning, as
-# documented in README.md's example block. uwb_mode: twr to match the real
-# Eliko hardware's own ranging scheme (eliko_messages/DistancesList) -- see
-# the "Ranging mode" section of README.md.
+# real Eliko UWB system (TWR hardware) plus the Eliko datasheet -- see
+# "UWBPX4Sim: Ultra-Wideband simulator for multi-robot applications"
+# (Robot Meets Ranging workshop, ICRA 2026), Section II-B and Table II.
+# Measured in LOS: sigma ~ 12 cm and ~zero bias at short range (< 10 m);
+# from the datasheet: ~75 m maximum range, ~50 cm noise near it. The
+# link-budget parameters below reproduce those points exactly (12 cm up to
+# 15 m, 50 cm at 75 m, 2% dropout up to ~15 m, no measurement beyond 75 m);
+# between them the curves follow the link budget's shape. NLOS is not
+# calibrated by this dataset (it was recorded in LOS): obstacle losses
+# come from ITU-R P.2040 attenuation rates (README.md, "Measurement model").
 #
 # Load via the setup GUI's "Plugin Parameters" tab (Preset dropdown), or
 # ./setup_simulator.sh --params eliko_identification (or pick it from the
 # terminal picker when --params is omitted).
 
-# Base GZ topics for simulated / ground-truth ranges.
+# Ranging mode: TWR, matching real Eliko hardware (eliko_messages/
+# DistancesList).
+uwb_mode: twr
 topic: /uwb_gz_simulator/distances
 ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
-
-# Additive Gaussian noise mean.
-gaussian_noise_mean_cm: 0.0
-
-# Persistent per-pair bias.
-apply_pair_bias: false
-bias_min_cm: -27.0
-bias_max_cm: 20.0
-
-# NLOS-aware degradation.
-enable_nlos_dropout: true
-nlos_endpoint_margin_m: 0.02
-
-# LOS distance-based dropout curve.
-los_dropout_start_distance_m: 10.0
-los_dropout_end_distance_m: 70.0
-los_hard_dropout_distance_m: 75.0
-
-# Blocked-thickness thresholds.
-los_max_thickness_m: 0.10
-soft_nlos_max_thickness_m: 0.50
-blackout_thickness_m: 1.0
-# Compiled-in default is 0.50; kept at 0.75 here to match the currently
-# tuned/running setup (this was the value in README.md's example block).
-hard_nlos_gap_ratio: 0.75
-
-# Dropout probability bounds.
-min_dropout_probability: 0.02
-max_dropout_probability: 0.90
-
-# Noise standard-deviation curve.
-min_noise_stddev_cm: 12.0
-max_noise_stddev_cm: 50.0
-los_stddev_start_distance_m: 15.0
-los_stddev_end_distance_m: 75.0
-
-# Extra weight given to blocked thickness vs. distance.
-nlos_dropout_thickness_extra_weight: 0.50
-nlos_stddev_thickness_extra_weight: 0.50
-
-# Ranging mode: TWR, matching real Eliko hardware (eliko_messages/
-# DistancesList) and this plugin's original behaviour.
-uwb_mode: twr
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
 
-# Material-aware NLOS model: off, matching this preset's baseline
-# (undifferentiated-obstacle) behaviour -- every obstacle uses the generic
-# thickness curve above. When turned on, the per-material penetration
-# lengths/permittivities default to the plugin's compiled-in table (see
-# README.md, "Measurement model"); override any of them here as
-# material_<name>_penetration_m / material_<name>_permittivity.
+# Link budget: free-space path loss (n = 2) relative to 1 m. 37.5 dB is
+# 75 m, the datasheet's maximum range.
+path_loss_exponent: 2.0
+max_link_loss_db: 37.5
+
+# Noise: 12 cm (measured) up to 23.5 dB (15 m), 50 cm (datasheet) at
+# 37.5 dB (75 m).
+min_noise_stddev_cm: 12.0
+max_noise_stddev_cm: 50.0
+noise_start_loss_db: 23.5
+noise_end_loss_db: 37.5
+
+# Dropout: 2% floor; logistic link failure least-squares fitted to the
+# paper's LOS dropout curve over 10-70 m (rms error 0.04).
+min_dropout_probability: 0.02
+dropout_mid_loss_db: 35.5
+dropout_width_db: 1.4
+enable_nlos_dropout: true
+
+# Obstacles (not calibrated by this dataset).
+nlos_endpoint_margin_m: 0.02
+nlos_min_loss_db: 3.0
+body_shadow_max_loss_db: 10.0
+
+# Materials: off -- every obstacle is the generic material (plasterboard's
+# ITU-R P.2040 rate at carrier_frequency_ghz). Set carrier_frequency_ghz to
+# the Eliko units' channel if known.
 enable_material_attenuation: false
-material_los_max_severity: 0.05
-nlos_dropout_material_extra_weight: 1.0
-nlos_stddev_material_extra_weight: 1.0
+carrier_frequency_ghz: 6.5
+material_metal_detour_loss_db: 20.0
 material_metal_detour_bias_cm: 35.0
+
+# Mean and persistent bias: ~zero in the measured LOS data.
+gaussian_noise_mean_cm: 0.0
+apply_pair_bias: false
+bias_min_cm: -27.0
+bias_max_cm: 20.0

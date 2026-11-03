@@ -32,29 +32,10 @@ GZ_ADD_PLUGIN(UWBGazeboSystem,
               UWBGazeboSystem::ISystemConfigure,
               UWBGazeboSystem::ISystemPreUpdate)
 
-// Helper functions            
+// Helper functions
 namespace
 {
 constexpr double kPositiveEpsilon = 1e-6;
-constexpr double kOrderingEpsilon = 1e-6;
-
-  //
-  double exponentialRamp(const double _x,
-                        const double _xStart,
-                        const double _xEnd,
-                        const double _yStart,
-                        const double _yEnd)
-  {
-    if (_x <= _xStart)
-      return _yStart;
-
-    if (_x >= _xEnd)
-      return _yEnd;
-
-    const double growthRate = std::log(_yEnd / _yStart) / (_xEnd - _xStart);
-    const double value = _yStart * std::exp(growthRate * (_x - _xStart));
-    return std::clamp(value, std::min(_yStart, _yEnd), std::max(_yStart, _yEnd));
-  }
 
   // Normalized linear mapping between a maximum and a minimum value, returns a value in range [0,1]
   double normalizedRamp(const double _x,
@@ -69,78 +50,6 @@ constexpr double kOrderingEpsilon = 1e-6;
 
     return (_x - _xStart) / (_xEnd - _xStart);
   }
-
-  // Probabilistic-OR combination of two severities in [0,1]:
-  // a (+) b = a + (1 - a) b = 1 - (1 - a)(1 - b). It only fills the headroom
-  // the other term leaves (no early saturation), but it's symmetric -- it
-  // gives neither input priority. Priority comes from the gains applied to
-  // each term before combining (see UWBGazeboSystem::ObstacleSeverity).
-  double orCombine(const double _a, const double _b)
-  {
-    const double a = std::clamp(_a, 0.0, 1.0);
-    const double b = std::clamp(_b, 0.0, 1.0);
-    return a + ((1.0 - a) * b);
-  }
-
-  // The one conductor in the material table: it isn't penetrated like a
-  // dielectric (no permittivity, no excess-delay bias); the first path
-  // detours around it instead (UWBGazeboSystem::metalDetourBiasCm_).
-  const std::string kConductorMaterial = "metal";
-
-  // Default material table: penetration length lambda (m) and relative
-  // permittivity eps_r. eps_r are typical few-GHz values from the
-  // literature; lambda values are chosen to reproduce the qualitative
-  // ordering of the UTIL dataset's NLOS material tests (cardboard/foam/
-  // wood ~ LOS, metal severe). See README.md, "Measurement model".
-  std::unordered_map<std::string, UWBGazeboSystem::MaterialProperties> defaultMaterials()
-  {
-    return {
-        {"metal", {0.0005, 1.0}},
-        {"concrete", {0.5, 5.0}},
-        {"glass", {0.5, 6.0}},
-        {"wood", {2.0, 2.0}},
-        {"plastic", {1.0, 2.5}},
-        {"cardboard", {10.0, 1.2}},
-        {"foam", {20.0, 1.05}},
-    };
-  }
-
-  std::string knownMaterialList(
-      const std::unordered_map<std::string, UWBGazeboSystem::MaterialProperties> &_materials)
-  {
-    std::vector<std::string> names;
-    for (const auto &[name, props] : _materials)
-      names.push_back(name);
-    std::sort(names.begin(), names.end());
-
-    std::string list;
-    for (const auto &name : names)
-      list += (list.empty() ? "" : ", ") + name;
-    return list;
-  }
-
-  // What a tag-anchor segment crosses: total chord length through untagged
-  // obstacles, and per tagged material.
-  struct BlockedPath
-  {
-    double untaggedM{0.0};
-    std::unordered_map<std::string, double> materialLengthM;
-  };
-
-  // Channel state of one tag-anchor link (see PreUpdate's evaluateLink).
-  struct LinkState
-  {
-    double distanceM{0.0};
-    double wallThicknessM{0.0};        // untagged wall chord length (raw)
-    double bodyShadowThicknessM{0.0};  // robot-body chord length (raw)
-    double materialLengthM{0.0};       // total tagged-material chord length
-    double untaggedThicknessM{0.0};    // tau: untagged walls + body-shadow equivalent
-    double materialSeverity{0.0};      // s_mat = 1 - exp(-sum l_k / lambda_k)
-    double materialBiasCm{0.0};        // beta: excess delay + metal detour
-    bool isNlos{false};
-    double dropoutProbability{0.0};
-    double noiseStddevCm{0.0};
-  };
 
   // Create a topic name based on tag and anchor id pairId (.e.g. a1t2 for anchor 1 - tag2), and a common namespace
   std::string makePairTopic(const std::string &_baseTopic, const std::string &_pairId)
@@ -178,9 +87,8 @@ constexpr double kOrderingEpsilon = 1e-6;
   // suffix, e.g. "wall_1__material_metal". Checked against both names so
   // either the model or an individual link/collision within it can carry
   // the tag, whichever is more convenient for a given world's authoring.
-  // Returns empty (no match) rather than a default, so the caller can fall
-  // back to materialAttenuationDefault_ uniformly for both "no tag at all"
-  // and "tag present but not in the configured table".
+  // Returns empty (no match), so the caller can treat "no tag at all" and
+  // "tag not in the material table" uniformly as the generic material.
   std::string extractMaterialName(const std::string &_name)
   {
     static const std::string kMarker = "__material_";
@@ -193,50 +101,133 @@ constexpr double kOrderingEpsilon = 1e-6;
                    [](const unsigned char c) { return std::tolower(c); });
     return material;
   }
+
+  // Material of untagged obstacles (and of every obstacle with the material
+  // model off).
+  const std::string kGenericMaterial = "generic";
+
+  // The one conductor in the material table: it isn't penetrated like a
+  // dielectric (no attenuation rate, no excess-delay bias); the first path
+  // detours around it instead (metalDetourLossDb_ / metalDetourBiasCm_).
+  const std::string kConductorMaterial = "metal";
+
+  // How a material's attenuation rate is derived from the carrier frequency.
+  struct MaterialModel
+  {
+    enum class Kind { Itu, LossTangent, Conductor };
+    Kind kind;
+    // Itu: ITU-R P.2040 Table 3 coefficients -- eps_r = a, conductivity
+    // sigma = c f^d S/m (f in GHz), rate = 1636 sigma / sqrt(eps_r) dB/m.
+    double a{1.0}, c{0.0}, d{0.0};
+    // LossTangent: rate = (8.686 pi f / c0) sqrt(eps_r) tan(delta)
+    //                   = 90.96 f[GHz] sqrt(eps_r) tan(delta) dB/m.
+    double tanDelta{0.0};
+    // eps_r used for the excess-delay bias (the ITU a, or the given value).
+    double permittivity{1.0};
+  };
+
+  // Default material table. "generic" uses plasterboard's attenuation (a
+  // typical interior wall) but no excess-delay bias by default, since an
+  // untagged obstacle's real material is unknown. See README.md,
+  // "Measurement model".
+  const std::unordered_map<std::string, MaterialModel> &materialModels()
+  {
+    using Kind = MaterialModel::Kind;
+    static const std::unordered_map<std::string, MaterialModel> models = {
+        {"generic", {Kind::Itu, 2.73, 0.0085, 0.9395, 0.0, 1.0}},
+        {"plasterboard", {Kind::Itu, 2.73, 0.0085, 0.9395, 0.0, 2.73}},
+        {"concrete", {Kind::Itu, 5.24, 0.0462, 0.7822, 0.0, 5.24}},
+        {"wood", {Kind::Itu, 1.99, 0.0047, 1.0718, 0.0, 1.99}},
+        {"glass", {Kind::Itu, 6.31, 0.0036, 1.3394, 0.0, 6.31}},
+        {"plastic", {Kind::LossTangent, 2.5, 0.0, 0.0, 0.01, 2.5}},
+        {"cardboard", {Kind::LossTangent, 1.2, 0.0, 0.0, 0.003, 1.2}},
+        {"foam", {Kind::LossTangent, 1.05, 0.0, 0.0, 0.0005, 1.05}},
+        {"metal", {Kind::Conductor}},
+    };
+    return models;
+  }
+
+  UWBGazeboSystem::MaterialProperties materialAt(const MaterialModel &_model,
+                                                 const double _frequencyGhz)
+  {
+    switch (_model.kind)
+    {
+      case MaterialModel::Kind::Itu:
+      {
+        const double conductivity = _model.c * std::pow(_frequencyGhz, _model.d);
+        return {1636.0 * conductivity / std::sqrt(_model.a), _model.permittivity};
+      }
+      case MaterialModel::Kind::LossTangent:
+        return {90.96 * _frequencyGhz * std::sqrt(_model.a) * _model.tanDelta, _model.permittivity};
+      case MaterialModel::Kind::Conductor:
+      default:
+        return {0.0, 1.0};
+    }
+  }
+
+  std::string knownMaterialList(
+      const std::unordered_map<std::string, UWBGazeboSystem::MaterialProperties> &_materials)
+  {
+    std::vector<std::string> names;
+    for (const auto &[name, props] : _materials)
+      names.push_back(name);
+    std::sort(names.begin(), names.end());
+
+    std::string list;
+    for (const auto &name : names)
+      list += (list.empty() ? "" : ", ") + name;
+    return list;
+  }
+
+  // What a tag-anchor segment crosses: total chord length through untagged
+  // obstacles, and per tagged material.
+  struct BlockedPath
+  {
+    double untaggedM{0.0};
+    std::unordered_map<std::string, double> materialLengthM;
+  };
+
+  // Channel state of one tag-anchor link (see PreUpdate's evaluateLink).
+  struct LinkState
+  {
+    double distanceM{0.0};
+    double wallThicknessM{0.0};        // untagged wall chord length
+    double bodyShadowThicknessM{0.0};  // robot-body chord length
+    double materialLengthM{0.0};       // total tagged-material chord length
+    double pathLossDb{0.0};            // L_d = 10 n log10(d)
+    double obstacleLossDb{0.0};        // L_obs: walls, materials, bodies
+    double biasCm{0.0};                // beta: excess delay + metal detour
+    bool isNlos{false};
+    double dropoutProbability{0.0};
+    double noiseStddevCm{0.0};
+  };
+
+  // Parameters of the previous (severity-curve) model. They no longer
+  // exist; Configure() says so rather than silently ignoring an old preset.
+  const char *const kRemovedParameters[] = {
+      "los_dropout_start_distance_m", "los_dropout_end_distance_m",
+      "los_hard_dropout_distance_m", "los_stddev_start_distance_m",
+      "los_stddev_end_distance_m", "los_max_thickness_m",
+      "soft_nlos_max_thickness_m", "blackout_thickness_m", "hard_nlos_gap_ratio",
+      "max_dropout_probability", "nlos_dropout_thickness_extra_weight",
+      "nlos_stddev_thickness_extra_weight", "nlos_dropout_material_extra_weight",
+      "nlos_stddev_material_extra_weight", "material_los_max_severity",
+      "material_attenuation_default"};
 }  // namespace
 
-double UWBGazeboSystem::ThicknessSeverity(const double _blockedThicknessM) const
+double UWBGazeboSystem::PathLossDb(const double _distanceM) const
 {
-  if (_blockedThicknessM <= this->losMaxThicknessM_)
-    return 0.0;
-
-  if (_blockedThicknessM >= this->blackoutThicknessM_)
-    return 1.0;
-
-  const double softLength = this->softNlosMaxThicknessM_ - this->losMaxThicknessM_;
-  const double hardLength = this->blackoutThicknessM_ - this->softNlosMaxThicknessM_;
-  const double hardSlopeMultiplier = 1.0 + this->hardNlosGapRatio_;
-  const double softSlope = 1.0 / (softLength + (hardSlopeMultiplier * hardLength));
-  const double hardSlope = hardSlopeMultiplier * softSlope;
-
-  if (_blockedThicknessM < this->softNlosMaxThicknessM_)
-    return (_blockedThicknessM - this->losMaxThicknessM_) * softSlope;
-
-  const double softEndSeverity = softLength * softSlope;
-  return softEndSeverity +
-         ((_blockedThicknessM - this->softNlosMaxThicknessM_) * hardSlope);
+  // Relative to 1 m; closer than that counts as 1 m (no negative loss).
+  return this->pathLossExponent_ * 10.0 * std::log10(std::max(_distanceM, 1.0));
 }
 
-double UWBGazeboSystem::ComputeBodyShadowEquivalentThicknessM(
-    const double _bodyBlockedThicknessM) const
-{
-  if (_bodyBlockedThicknessM <= this->losMaxThicknessM_)
-    return 0.0;
-
-  return std::min(_bodyBlockedThicknessM, this->softNlosMaxThicknessM_);
-}
-
-void UWBGazeboSystem::ComputeMaterialEffects(
+void UWBGazeboSystem::ComputeObstacleEffects(
     const std::unordered_map<std::string, double> &_materialLengthM,
-    double &_severity,
+    double &_lossDb,
     double &_biasCm) const
 {
-  // Beer-Lambert: A = sum_k l_k / lambda_k, s_mat = 1 - exp(-A). The
-  // material sets lambda over orders of magnitude (mm for metal, tens of m
-  // for foam), the chord length only enters through l/lambda -- which is
-  // what makes material more influential than thickness.
-  double attenuation = 0.0;
   bool crossesConductor = false;
+  _lossDb = 0.0;
   _biasCm = 0.0;
 
   for (const auto &[materialName, lengthM] : _materialLengthM)
@@ -245,14 +236,13 @@ void UWBGazeboSystem::ComputeMaterialEffects(
     if (it == this->materials_.end() || lengthM <= 0.0)
       continue;
 
-    attenuation += lengthM / it->second.penetrationM;
-
     if (materialName == kConductorMaterial)
     {
       crossesConductor = true;
       continue;
     }
 
+    _lossDb += it->second.attenuationDbPerM * lengthM;
     // Excess delay of propagating through a dielectric at c/sqrt(eps_r)
     // instead of c: beta = l (sqrt(eps_r) - 1).
     _biasCm += lengthM * (std::sqrt(it->second.permittivity) - 1.0) * 100.0;
@@ -261,109 +251,32 @@ void UWBGazeboSystem::ComputeMaterialEffects(
   // Applied once per link, however many metal obstacles it crosses: the
   // first path detours around the whole obstruction.
   if (crossesConductor)
-    _biasCm += this->metalDetourBiasCm_;
-
-  _severity = 1.0 - std::exp(-attenuation);
-}
-
-bool UWBGazeboSystem::IsNlos(const double _untaggedThicknessM,
-                             const double _materialSeverity) const
-{
-  return (_untaggedThicknessM > this->losMaxThicknessM_) ||
-         (_materialSeverity > this->materialLosMaxSeverity_);
-}
-
-double UWBGazeboSystem::ObstacleSeverity(const double _untaggedThicknessM,
-                                         const double _materialSeverity,
-                                         const double _thicknessExtraWeight,
-                                         const double _materialExtraWeight) const
-{
-  // Untagged obstacles: generic thickness curve, gain g_tau = 1 + w_tau.
-  const double thicknessTerm = std::min(
-      1.0, (1.0 + _thicknessExtraWeight) * this->ThicknessSeverity(_untaggedThicknessM));
-
-  // Tagged materials: Beer-Lambert severity, re-zeroed at the material LOS
-  // threshold (so the term is continuous where a link turns NLOS), gain
-  // g_mat = 1 + w_mat >= g_tau.
-  double materialTerm = 0.0;
-  if (_materialSeverity > this->materialLosMaxSeverity_)
   {
-    const double rezeroed = (_materialSeverity - this->materialLosMaxSeverity_) /
-                            (1.0 - this->materialLosMaxSeverity_);
-    materialTerm = std::min(1.0, (1.0 + _materialExtraWeight) * rezeroed);
+    _lossDb += this->metalDetourLossDb_;
+    _biasCm += this->metalDetourBiasCm_;
   }
-
-  return orCombine(thicknessTerm, materialTerm);
 }
 
-double UWBGazeboSystem::ComputeDropoutProbability(const double _distanceM,
-                                                  const double _untaggedThicknessM,
-                                                  const double _materialSeverity) const
+double UWBGazeboSystem::ComputeNoiseStddevCm(const double _lossDb) const
 {
-  if (_distanceM > this->losHardDropoutDistanceM_)
+  // sigma = sigma_min (sigma_max / sigma_min)^ramp(L): exponential in dB,
+  // i.e. a power law in distance.
+  const double severity =
+      normalizedRamp(_lossDb, this->noiseStartLossDb_, this->noiseEndLossDb_);
+  return this->minNoiseStddevCm_ *
+         std::pow(this->maxNoiseStddevCm_ / this->minNoiseStddevCm_, severity);
+}
+
+double UWBGazeboSystem::ComputeDropoutProbability(const double _lossDb) const
+{
+  if (_lossDb >= this->maxLinkLossDb_)
     return 1.0;
 
-  if (this->enableNlosDropout_ && this->IsNlos(_untaggedThicknessM, _materialSeverity))
-  {
-    if (_untaggedThicknessM >= this->blackoutThicknessM_)
-      return 1.0;
-
-    const double distanceSeverity = normalizedRamp(_distanceM,
-                                                   this->losDropoutStartDistanceM_,
-                                                   this->losDropoutEndDistanceM_);
-    const double combinedSeverity = orCombine(
-        distanceSeverity,
-        this->ObstacleSeverity(_untaggedThicknessM,
-                               _materialSeverity,
-                               this->nlosDropoutThicknessExtraWeight_,
-                               this->nlosDropoutMaterialExtraWeight_));
-
-    return exponentialRamp(combinedSeverity,
-                           0.0,
-                           1.0,
-                           this->minDropoutProbability_,
-                           this->maxDropoutProbability_);
-  }
-
-  return exponentialRamp(_distanceM,
-                         this->losDropoutStartDistanceM_,
-                         this->losDropoutEndDistanceM_,
-                         this->minDropoutProbability_,
-                         this->maxDropoutProbability_);
-}
-
-double UWBGazeboSystem::ComputeNoiseStddevCm(const double _distanceM,
-                                             const double _untaggedThicknessM,
-                                             const double _materialSeverity) const
-{
-  const double distanceSeverity = normalizedRamp(_distanceM,
-                                                 this->losStddevStartDistanceM_,
-                                                 this->losStddevEndDistanceM_);
-
-  if (this->IsNlos(_untaggedThicknessM, _materialSeverity))
-  {
-    if (_untaggedThicknessM >= this->blackoutThicknessM_)
-      return this->maxNoiseStddevCm_;
-
-    const double combinedSeverity = orCombine(
-        distanceSeverity,
-        this->ObstacleSeverity(_untaggedThicknessM,
-                               _materialSeverity,
-                               this->nlosStddevThicknessExtraWeight_,
-                               this->nlosStddevMaterialExtraWeight_));
-
-    return exponentialRamp(combinedSeverity,
-                           0.0,
-                           1.0,
-                           this->minNoiseStddevCm_,
-                           this->maxNoiseStddevCm_);
-  }
-
-  return exponentialRamp(distanceSeverity,
-                         0.0,
-                         1.0,
-                         this->minNoiseStddevCm_,
-                         this->maxNoiseStddevCm_);
+  // Independent floor (random packet loss) and link failure as the budget
+  // runs out: p = 1 - (1 - p_min)(1 - logistic((L - L50) / w)).
+  const double linkFailure =
+      1.0 / (1.0 + std::exp(-(_lossDb - this->dropoutMidLossDb_) / this->dropoutWidthDb_));
+  return 1.0 - ((1.0 - this->minDropoutProbability_) * (1.0 - linkFailure));
 }
 
 void UWBGazeboSystem::ValidateAndNormalizeParameters()
@@ -380,83 +293,64 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
     this->nlosEndpointMarginM_ = 0.0;
   }
 
-  auto clampPositive = [](const double value) {
-    return std::max(value, kPositiveEpsilon);
-  };
-
-  this->minDropoutProbability_ = std::clamp(this->minDropoutProbability_,
-                                            kPositiveEpsilon,
-                                            1.0);
-  this->maxDropoutProbability_ = std::clamp(this->maxDropoutProbability_,
-                                            kPositiveEpsilon,
-                                            1.0);
-  if (this->minDropoutProbability_ > this->maxDropoutProbability_)
+  if (this->pathLossExponent_ < 0.1)
   {
-    gzwarn << "[UWBGazeboSystem] min_dropout_probability > max_dropout_probability. Swapping values.\n";
-    std::swap(this->minDropoutProbability_, this->maxDropoutProbability_);
+    gzwarn << "[UWBGazeboSystem] path_loss_exponent < 0.1. Clamping to 0.1.\n";
+    this->pathLossExponent_ = 0.1;
   }
 
-  this->minNoiseStddevCm_ = clampPositive(this->minNoiseStddevCm_);
-  this->maxNoiseStddevCm_ = clampPositive(this->maxNoiseStddevCm_);
+  auto clampNonNegative = [](double &_value, const char *_name)
+  {
+    if (_value < 0.0)
+    {
+      gzwarn << "[UWBGazeboSystem] " << _name << " < 0.0. Clamping to 0.0.\n";
+      _value = 0.0;
+    }
+  };
+  clampNonNegative(this->maxLinkLossDb_, "max_link_loss_db");
+  clampNonNegative(this->noiseStartLossDb_, "noise_start_loss_db");
+  clampNonNegative(this->noiseEndLossDb_, "noise_end_loss_db");
+  clampNonNegative(this->dropoutMidLossDb_, "dropout_mid_loss_db");
+  clampNonNegative(this->nlosMinLossDb_, "nlos_min_loss_db");
+  clampNonNegative(this->bodyShadowMaxLossDb_, "body_shadow_max_loss_db");
+  clampNonNegative(this->metalDetourLossDb_, "material_metal_detour_loss_db");
+  clampNonNegative(this->metalDetourBiasCm_, "material_metal_detour_bias_cm");
+
+  if (this->noiseEndLossDb_ < this->noiseStartLossDb_)
+  {
+    gzwarn << "[UWBGazeboSystem] noise_end_loss_db < noise_start_loss_db. Swapping values.\n";
+    std::swap(this->noiseStartLossDb_, this->noiseEndLossDb_);
+  }
+
+  this->minNoiseStddevCm_ = std::max(this->minNoiseStddevCm_, kPositiveEpsilon);
+  this->maxNoiseStddevCm_ = std::max(this->maxNoiseStddevCm_, kPositiveEpsilon);
   if (this->minNoiseStddevCm_ > this->maxNoiseStddevCm_)
   {
     gzwarn << "[UWBGazeboSystem] min_noise_stddev_cm > max_noise_stddev_cm. Swapping values.\n";
     std::swap(this->minNoiseStddevCm_, this->maxNoiseStddevCm_);
   }
 
-  if (this->losDropoutEndDistanceM_ < this->losDropoutStartDistanceM_)
+  const double clampedMinDropout = std::clamp(this->minDropoutProbability_, 0.0, 1.0);
+  if (clampedMinDropout != this->minDropoutProbability_)
   {
-    gzwarn << "[UWBGazeboSystem] los_dropout_end_distance_m < los_dropout_start_distance_m. Swapping values.\n";
-    std::swap(this->losDropoutStartDistanceM_, this->losDropoutEndDistanceM_);
+    gzwarn << "[UWBGazeboSystem] min_dropout_probability out of [0,1]. Clamped to "
+           << clampedMinDropout << ".\n";
+    this->minDropoutProbability_ = clampedMinDropout;
   }
 
-  if (this->losStddevEndDistanceM_ < this->losStddevStartDistanceM_)
+  if (this->dropoutWidthDb_ < 0.01)
   {
-    gzwarn << "[UWBGazeboSystem] los_stddev_end_distance_m < los_stddev_start_distance_m. Swapping values.\n";
-    std::swap(this->losStddevStartDistanceM_, this->losStddevEndDistanceM_);
+    gzwarn << "[UWBGazeboSystem] dropout_width_db < 0.01. Clamping to 0.01.\n";
+    this->dropoutWidthDb_ = 0.01;
   }
 
-  if (this->losHardDropoutDistanceM_ < this->losDropoutEndDistanceM_)
+  // ITU-R P.2040's material coefficients are fitted over 1-100 GHz.
+  const double clampedFrequency = std::clamp(this->carrierFrequencyGhz_, 1.0, 100.0);
+  if (clampedFrequency != this->carrierFrequencyGhz_)
   {
-    gzwarn << "[UWBGazeboSystem] los_hard_dropout_distance_m < los_dropout_end_distance_m. Raising to los_dropout_end_distance_m.\n";
-    this->losHardDropoutDistanceM_ = this->losDropoutEndDistanceM_;
-  }
-
-  this->losMaxThicknessM_ = std::max(this->losMaxThicknessM_, 0.0);
-  this->softNlosMaxThicknessM_ =
-      std::max(this->softNlosMaxThicknessM_, this->losMaxThicknessM_ + kOrderingEpsilon);
-  this->blackoutThicknessM_ =
-      std::max(this->blackoutThicknessM_, this->softNlosMaxThicknessM_ + kOrderingEpsilon);
-
-  const bool hardGapWasOutOfRange =
-      (this->hardNlosGapRatio_ < 0.0) || (this->hardNlosGapRatio_ > 1.0);
-  this->hardNlosGapRatio_ = std::clamp(this->hardNlosGapRatio_, 0.0, 1.0);
-  if (hardGapWasOutOfRange)
-  {
-    gzwarn << "[UWBGazeboSystem] hard_nlos_gap_ratio out of [0,1]. Clamped to "
-           << this->hardNlosGapRatio_ << ".\n";
-  }
-
-  const bool dropoutThicknessExtraWasOutOfRange =
-      (this->nlosDropoutThicknessExtraWeight_ < 0.0) ||
-      (this->nlosDropoutThicknessExtraWeight_ > 1.0);
-  this->nlosDropoutThicknessExtraWeight_ =
-      std::clamp(this->nlosDropoutThicknessExtraWeight_, 0.0, 1.0);
-  if (dropoutThicknessExtraWasOutOfRange)
-  {
-    gzwarn << "[UWBGazeboSystem] nlos_dropout_thickness_extra_weight out of [0,1]. Clamped to "
-           << this->nlosDropoutThicknessExtraWeight_ << ".\n";
-  }
-
-  const bool stddevThicknessExtraWasOutOfRange =
-      (this->nlosStddevThicknessExtraWeight_ < 0.0) ||
-      (this->nlosStddevThicknessExtraWeight_ > 1.0);
-  this->nlosStddevThicknessExtraWeight_ =
-      std::clamp(this->nlosStddevThicknessExtraWeight_, 0.0, 1.0);
-  if (stddevThicknessExtraWasOutOfRange)
-  {
-    gzwarn << "[UWBGazeboSystem] nlos_stddev_thickness_extra_weight out of [0,1]. Clamped to "
-           << this->nlosStddevThicknessExtraWeight_ << ".\n";
+    gzwarn << "[UWBGazeboSystem] carrier_frequency_ghz out of ITU-R P.2040's [1,100] GHz. Clamped to "
+           << clampedFrequency << ".\n";
+    this->carrierFrequencyGhz_ = clampedFrequency;
   }
 
   if (this->topic_.empty())
@@ -484,67 +378,6 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
               "/uwb_gz_simulator/tdoa_ground_truth.\n";
     this->tdoaGroundTruthTopic_ = "/uwb_gz_simulator/tdoa_ground_truth";
   }
-
-  const bool materialLosWasOutOfRange =
-      (this->materialLosMaxSeverity_ < 0.0) || (this->materialLosMaxSeverity_ > 0.99);
-  this->materialLosMaxSeverity_ = std::clamp(this->materialLosMaxSeverity_, 0.0, 0.99);
-  if (materialLosWasOutOfRange)
-  {
-    gzwarn << "[UWBGazeboSystem] material_los_max_severity out of [0,0.99]. Clamped to "
-           << this->materialLosMaxSeverity_ << ".\n";
-  }
-
-  // Material extra weights live in [0,2] (gain 1..3), and must be at least
-  // the matching thickness weight: material is meant to be the most
-  // influential NLOS factor, then thickness, then distance.
-  auto normalizeMaterialWeight = [](double &_weight,
-                                    const double _thicknessWeight,
-                                    const char *_name,
-                                    const char *_thicknessName)
-  {
-    if (_weight < 0.0 || _weight > 2.0)
-    {
-      _weight = std::clamp(_weight, 0.0, 2.0);
-      gzwarn << "[UWBGazeboSystem] " << _name << " out of [0,2]. Clamped to " << _weight << ".\n";
-    }
-    if (_weight < _thicknessWeight)
-    {
-      gzwarn << "[UWBGazeboSystem] " << _name << " < " << _thicknessName
-             << " (material must weigh at least as much as thickness). Raising to "
-             << _thicknessWeight << ".\n";
-      _weight = _thicknessWeight;
-    }
-  };
-  normalizeMaterialWeight(this->nlosDropoutMaterialExtraWeight_,
-                          this->nlosDropoutThicknessExtraWeight_,
-                          "nlos_dropout_material_extra_weight",
-                          "nlos_dropout_thickness_extra_weight");
-  normalizeMaterialWeight(this->nlosStddevMaterialExtraWeight_,
-                          this->nlosStddevThicknessExtraWeight_,
-                          "nlos_stddev_material_extra_weight",
-                          "nlos_stddev_thickness_extra_weight");
-
-  if (this->metalDetourBiasCm_ < 0.0)
-  {
-    gzwarn << "[UWBGazeboSystem] material_metal_detour_bias_cm < 0.0. Clamping to 0.0.\n";
-    this->metalDetourBiasCm_ = 0.0;
-  }
-
-  for (auto &[materialName, props] : this->materials_)
-  {
-    if (props.penetrationM < kPositiveEpsilon)
-    {
-      gzwarn << "[UWBGazeboSystem] material_" << materialName
-             << "_penetration_m must be > 0. Clamping to " << kPositiveEpsilon << ".\n";
-      props.penetrationM = kPositiveEpsilon;
-    }
-    if (props.permittivity < 1.0)
-    {
-      gzwarn << "[UWBGazeboSystem] material_" << materialName
-             << "_permittivity < 1.0 (faster than light). Clamping to 1.0.\n";
-      props.permittivity = 1.0;
-    }
-  }
 }
 
 void UWBGazeboSystem::Configure(const gz::sim::Entity &,
@@ -552,80 +385,44 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
                                 gz::sim::EntityComponentManager &,
                                 gz::sim::EventManager &)
 {
-  if (_sdf && _sdf->HasElement("gaussian_noise_mean_cm"))
-    this->noiseMeanCm_ = _sdf->Get<double>("gaussian_noise_mean_cm");
-
-  if (_sdf && _sdf->HasElement("bias_min_cm"))
-    this->biasMinCm_ = _sdf->Get<double>("bias_min_cm");
-
-  if (_sdf && _sdf->HasElement("bias_max_cm"))
-    this->biasMaxCm_ = _sdf->Get<double>("bias_max_cm");
-
-  if (_sdf && _sdf->HasElement("apply_pair_bias"))
-    this->applyPairBias_ = _sdf->Get<bool>("apply_pair_bias");
-
-  if (_sdf && _sdf->HasElement("enable_nlos_dropout"))
-    this->enableNlosDropout_ = _sdf->Get<bool>("enable_nlos_dropout");
-
-  if (_sdf && _sdf->HasElement("nlos_endpoint_margin_m"))
-    this->nlosEndpointMarginM_ = _sdf->Get<double>("nlos_endpoint_margin_m");
-
-  if (_sdf && _sdf->HasElement("nlos_dropout_thickness_extra_weight"))
+  auto readDouble = [&](const char *_name, double &_value)
   {
-    this->nlosDropoutThicknessExtraWeight_ =
-        _sdf->Get<double>("nlos_dropout_thickness_extra_weight");
-  }
-
-  if (_sdf && _sdf->HasElement("nlos_stddev_thickness_extra_weight"))
+    if (_sdf && _sdf->HasElement(_name))
+      _value = _sdf->Get<double>(_name);
+  };
+  auto readBool = [&](const char *_name, bool &_value)
   {
-    this->nlosStddevThicknessExtraWeight_ =
-        _sdf->Get<double>("nlos_stddev_thickness_extra_weight");
-  }
+    if (_sdf && _sdf->HasElement(_name))
+      _value = _sdf->Get<bool>(_name);
+  };
+  auto readString = [&](const char *_name, std::string &_value)
+  {
+    if (_sdf && _sdf->HasElement(_name))
+      _value = _sdf->Get<std::string>(_name);
+  };
 
-  if (_sdf && _sdf->HasElement("los_dropout_start_distance_m"))
-    this->losDropoutStartDistanceM_ = _sdf->Get<double>("los_dropout_start_distance_m");
+  readDouble("gaussian_noise_mean_cm", this->noiseMeanCm_);
+  readDouble("bias_min_cm", this->biasMinCm_);
+  readDouble("bias_max_cm", this->biasMaxCm_);
+  readBool("apply_pair_bias", this->applyPairBias_);
 
-  if (_sdf && _sdf->HasElement("los_dropout_end_distance_m"))
-    this->losDropoutEndDistanceM_ = _sdf->Get<double>("los_dropout_end_distance_m");
+  readDouble("path_loss_exponent", this->pathLossExponent_);
+  readDouble("max_link_loss_db", this->maxLinkLossDb_);
+  readDouble("noise_start_loss_db", this->noiseStartLossDb_);
+  readDouble("noise_end_loss_db", this->noiseEndLossDb_);
+  readDouble("min_noise_stddev_cm", this->minNoiseStddevCm_);
+  readDouble("max_noise_stddev_cm", this->maxNoiseStddevCm_);
+  readDouble("min_dropout_probability", this->minDropoutProbability_);
+  readDouble("dropout_mid_loss_db", this->dropoutMidLossDb_);
+  readDouble("dropout_width_db", this->dropoutWidthDb_);
 
-  if (_sdf && _sdf->HasElement("los_hard_dropout_distance_m"))
-    this->losHardDropoutDistanceM_ = _sdf->Get<double>("los_hard_dropout_distance_m");
+  readBool("enable_nlos_dropout", this->enableNlosDropout_);
+  readDouble("nlos_endpoint_margin_m", this->nlosEndpointMarginM_);
+  readDouble("nlos_min_loss_db", this->nlosMinLossDb_);
+  readDouble("body_shadow_max_loss_db", this->bodyShadowMaxLossDb_);
 
-  if (_sdf && _sdf->HasElement("los_max_thickness_m"))
-    this->losMaxThicknessM_ = _sdf->Get<double>("los_max_thickness_m");
-
-  if (_sdf && _sdf->HasElement("soft_nlos_max_thickness_m"))
-    this->softNlosMaxThicknessM_ = _sdf->Get<double>("soft_nlos_max_thickness_m");
-
-  if (_sdf && _sdf->HasElement("blackout_thickness_m"))
-    this->blackoutThicknessM_ = _sdf->Get<double>("blackout_thickness_m");
-
-  if (_sdf && _sdf->HasElement("hard_nlos_gap_ratio"))
-    this->hardNlosGapRatio_ = _sdf->Get<double>("hard_nlos_gap_ratio");
-
-  if (_sdf && _sdf->HasElement("min_dropout_probability"))
-    this->minDropoutProbability_ = _sdf->Get<double>("min_dropout_probability");
-
-  if (_sdf && _sdf->HasElement("max_dropout_probability"))
-    this->maxDropoutProbability_ = _sdf->Get<double>("max_dropout_probability");
-
-  if (_sdf && _sdf->HasElement("min_noise_stddev_cm"))
-    this->minNoiseStddevCm_ = _sdf->Get<double>("min_noise_stddev_cm");
-
-  if (_sdf && _sdf->HasElement("max_noise_stddev_cm"))
-    this->maxNoiseStddevCm_ = _sdf->Get<double>("max_noise_stddev_cm");
-
-  if (_sdf && _sdf->HasElement("los_stddev_start_distance_m"))
-    this->losStddevStartDistanceM_ = _sdf->Get<double>("los_stddev_start_distance_m");
-
-  if (_sdf && _sdf->HasElement("los_stddev_end_distance_m"))
-    this->losStddevEndDistanceM_ = _sdf->Get<double>("los_stddev_end_distance_m");
-
-  if (_sdf && _sdf->HasElement("topic"))
-    this->topic_ = _sdf->Get<std::string>("topic");
-
-  if (_sdf && _sdf->HasElement("ground_truth_topic"))
-    this->groundTruthTopic_ = _sdf->Get<std::string>("ground_truth_topic");
+  readString("topic", this->topic_);
+  readString("ground_truth_topic", this->groundTruthTopic_);
 
   if (_sdf && _sdf->HasElement("uwb_mode"))
   {
@@ -641,63 +438,62 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
              << "' (expected 'twr' or 'tdoa'). Keeping 'twr'.\n";
   }
 
-  if (_sdf && _sdf->HasElement("tdoa_topic"))
-    this->tdoaTopic_ = _sdf->Get<std::string>("tdoa_topic");
+  readString("tdoa_topic", this->tdoaTopic_);
+  readString("tdoa_ground_truth_topic", this->tdoaGroundTruthTopic_);
 
-  if (_sdf && _sdf->HasElement("tdoa_ground_truth_topic"))
-    this->tdoaGroundTruthTopic_ = _sdf->Get<std::string>("tdoa_ground_truth_topic");
+  readBool("enable_material_attenuation", this->enableMaterialAttenuation_);
+  readDouble("carrier_frequency_ghz", this->carrierFrequencyGhz_);
+  readDouble("material_metal_detour_loss_db", this->metalDetourLossDb_);
+  readDouble("material_metal_detour_bias_cm", this->metalDetourBiasCm_);
 
-  if (_sdf && _sdf->HasElement("enable_material_attenuation"))
-    this->enableMaterialAttenuation_ = _sdf->Get<bool>("enable_material_attenuation");
-
-  if (_sdf && _sdf->HasElement("material_los_max_severity"))
-    this->materialLosMaxSeverity_ = _sdf->Get<double>("material_los_max_severity");
-
-  if (_sdf && _sdf->HasElement("nlos_dropout_material_extra_weight"))
+  for (const char *removed : kRemovedParameters)
   {
-    this->nlosDropoutMaterialExtraWeight_ =
-        _sdf->Get<double>("nlos_dropout_material_extra_weight");
-  }
-
-  if (_sdf && _sdf->HasElement("nlos_stddev_material_extra_weight"))
-  {
-    this->nlosStddevMaterialExtraWeight_ =
-        _sdf->Get<double>("nlos_stddev_material_extra_weight");
-  }
-
-  if (_sdf && _sdf->HasElement("material_metal_detour_bias_cm"))
-    this->metalDetourBiasCm_ = _sdf->Get<double>("material_metal_detour_bias_cm");
-
-  // Fixed material set (defaultMaterials()), not a free-form table: each
-  // entry is overridable through scalar "material_<name>_penetration_m" /
-  // "material_<name>_permittivity" parameters (no permittivity for the
-  // conductor). Add a material to defaultMaterials() (and to gui/app.py's
-  // PARAM_GROUPS and the presets) if a world needs one not listed.
-  this->materials_ = defaultMaterials();
-  this->warnedUnknownMaterials_.clear();
-  for (auto &[materialName, props] : this->materials_)
-  {
-    const std::string prefix = "material_" + materialName;
-    if (_sdf && _sdf->HasElement(prefix + "_penetration_m"))
-      props.penetrationM = _sdf->Get<double>(prefix + "_penetration_m");
-    if (materialName != kConductorMaterial && _sdf && _sdf->HasElement(prefix + "_permittivity"))
-      props.permittivity = _sdf->Get<double>(prefix + "_permittivity");
-  }
-
-  // The previous material model's scalar multipliers no longer exist; say
-  // so rather than silently ignoring an old preset.
-  for (const char *oldName : {"default", "metal", "wood", "cardboard", "plastic", "foam"})
-  {
-    const std::string paramName = std::string("material_attenuation_") + oldName;
-    if (_sdf && _sdf->HasElement(paramName))
+    if (_sdf && _sdf->HasElement(removed))
     {
-      gzwarn << "[UWBGazeboSystem] " << paramName << " is no longer used (replaced by "
-                "material_<name>_penetration_m / _permittivity; see README.md, "
-                "\"Measurement model\"). Ignoring it.\n";
+      gzwarn << "[UWBGazeboSystem] " << removed << " is no longer used (the model is now a "
+                "link budget; see README.md, \"Measurement model\"). Ignoring it.\n";
     }
   }
 
   this->ValidateAndNormalizeParameters();
+
+  // Material table at the (validated) carrier frequency, then per-material
+  // overrides: scalar "material_<name>_attenuation_db_per_m" /
+  // "material_<name>_permittivity" parameters (neither for the conductor).
+  // Add a material to materialModels() (and to gui/app.py's PARAM_GROUPS)
+  // if a world needs one not listed.
+  this->materials_.clear();
+  this->warnedUnknownMaterials_.clear();
+  for (const auto &[materialName, model] : materialModels())
+  {
+    auto props = materialAt(model, this->carrierFrequencyGhz_);
+    if (materialName != kConductorMaterial)
+    {
+      const std::string prefix = "material_" + materialName;
+      if (_sdf && _sdf->HasElement(prefix + "_attenuation_db_per_m"))
+        props.attenuationDbPerM = _sdf->Get<double>(prefix + "_attenuation_db_per_m");
+      if (_sdf && _sdf->HasElement(prefix + "_permittivity"))
+        props.permittivity = _sdf->Get<double>(prefix + "_permittivity");
+      if (_sdf && _sdf->HasElement(prefix + "_penetration_m"))
+      {
+        gzwarn << "[UWBGazeboSystem] " << prefix << "_penetration_m is no longer used "
+                  "(replaced by " << prefix << "_attenuation_db_per_m). Ignoring it.\n";
+      }
+
+      if (props.attenuationDbPerM < 0.0)
+      {
+        gzwarn << "[UWBGazeboSystem] " << prefix << "_attenuation_db_per_m < 0.0. Clamping to 0.0.\n";
+        props.attenuationDbPerM = 0.0;
+      }
+      if (props.permittivity < 1.0)
+      {
+        gzwarn << "[UWBGazeboSystem] " << prefix
+               << "_permittivity < 1.0 (faster than light). Clamping to 1.0.\n";
+        props.permittivity = 1.0;
+      }
+    }
+    this->materials_[materialName] = props;
+  }
 
   this->biasCmDist_ =
       std::uniform_real_distribution<double>(this->biasMinCm_, this->biasMaxCm_);
@@ -706,13 +502,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   this->groundTruthPublishers_.clear();
 
   std::ostringstream materialSummary;
-  if (this->enableMaterialAttenuation_)
   {
-    materialSummary << ", material_los_max_severity=" << this->materialLosMaxSeverity_
-                    << ", nlos_dropout_material_extra_weight=" << this->nlosDropoutMaterialExtraWeight_
-                    << ", nlos_stddev_material_extra_weight=" << this->nlosStddevMaterialExtraWeight_
-                    << ", material_metal_detour_bias_cm=" << this->metalDetourBiasCm_
-                    << ", materials={";
     std::vector<std::string> names;
     for (const auto &[name, props] : this->materials_)
       names.push_back(name);
@@ -720,45 +510,36 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
     for (size_t i = 0; i < names.size(); ++i)
     {
       const auto &props = this->materials_.at(names[i]);
-      materialSummary << (i ? ", " : "") << names[i] << ":{lambda_m=" << props.penetrationM;
-      if (names[i] != kConductorMaterial)
-        materialSummary << ", eps_r=" << props.permittivity;
-      materialSummary << "}";
+      materialSummary << (i ? ", " : "") << names[i];
+      if (names[i] == kConductorMaterial)
+        materialSummary << ":{detour_loss_db=" << this->metalDetourLossDb_
+                        << ", detour_bias_cm=" << this->metalDetourBiasCm_ << "}";
+      else
+        materialSummary << ":{dB_per_m=" << props.attenuationDbPerM
+                        << ", eps_r=" << props.permittivity << "}";
     }
-    materialSummary << "}";
   }
 
-  gzmsg << "[UWBGazeboSystem] Sensor model: gaussian_mean_cm=" << this->noiseMeanCm_
-        << ", dropout_probability_range=[" << this->minDropoutProbability_ << ", "
-        << this->maxDropoutProbability_ << "]"
-        << ", dynamic_stddev_cm=[" << this->minNoiseStddevCm_ << ", "
-        << this->maxNoiseStddevCm_ << "]"
-        << ", los_dropout_range_m=[" << this->losDropoutStartDistanceM_ << ", "
-        << this->losDropoutEndDistanceM_ << "]"
-        << ", los_hard_dropout_distance_m=" << this->losHardDropoutDistanceM_
-        << ", los_stddev_range_m=[" << this->losStddevStartDistanceM_ << ", "
-        << this->losStddevEndDistanceM_ << "]"
-        << ", thickness_regimes_m={los<=" << this->losMaxThicknessM_
-        << ", soft<=" << this->softNlosMaxThicknessM_
-        << ", hard<" << this->blackoutThicknessM_
-        << ", blackout>=" << this->blackoutThicknessM_ << "}"
-        << ", thickness_severity=piecewise_linear(thickness){hard_slope_multiplier="
-        << (1.0 + this->hardNlosGapRatio_) << "}"
-        << ", body_shadow_equivalent_thickness_m=min(body_blocked_thickness, soft_nlos_max_thickness_m)"
-        << ", bias_min_cm=" << this->biasMinCm_
-        << ", bias_max_cm=" << this->biasMaxCm_
-        << ", apply_pair_bias=" << std::boolalpha << this->applyPairBias_
+  gzmsg << "[UWBGazeboSystem] Link-budget model: path_loss_exponent=" << this->pathLossExponent_
+        << ", max_link_loss_db=" << this->maxLinkLossDb_
+        << ", noise_loss_range_db=[" << this->noiseStartLossDb_ << ", " << this->noiseEndLossDb_ << "]"
+        << ", noise_stddev_cm=[" << this->minNoiseStddevCm_ << ", " << this->maxNoiseStddevCm_ << "]"
+        << ", min_dropout_probability=" << this->minDropoutProbability_
+        << ", dropout_mid_loss_db=" << this->dropoutMidLossDb_
+        << ", dropout_width_db=" << this->dropoutWidthDb_
         << ", enable_nlos_dropout=" << std::boolalpha << this->enableNlosDropout_
+        << ", nlos_min_loss_db=" << this->nlosMinLossDb_
+        << ", body_shadow_max_loss_db=" << this->bodyShadowMaxLossDb_
         << ", nlos_endpoint_margin_m=" << this->nlosEndpointMarginM_
-        << ", nlos_dropout_thickness_extra_weight="
-        << this->nlosDropoutThicknessExtraWeight_
-        << ", nlos_stddev_thickness_extra_weight="
-        << this->nlosStddevThicknessExtraWeight_
+        << ", gaussian_mean_cm=" << this->noiseMeanCm_
+        << ", apply_pair_bias=" << std::boolalpha << this->applyPairBias_
+        << ", bias_cm=[" << this->biasMinCm_ << ", " << this->biasMaxCm_ << "]"
+        << ", uwb_mode=" << (this->uwbMode_ == UwbMode::Tdoa ? "tdoa" : "twr")
         << ", topic=" << this->topic_
         << ", ground_truth_topic=" << this->groundTruthTopic_
-        << ", uwb_mode=" << (this->uwbMode_ == UwbMode::Tdoa ? "tdoa" : "twr")
         << ", enable_material_attenuation=" << std::boolalpha << this->enableMaterialAttenuation_
-        << materialSummary.str() << "\n";
+        << ", carrier_frequency_ghz=" << this->carrierFrequencyGhz_
+        << ", materials={" << materialSummary.str() << "}\n";
 }
 
 gz::math::Pose3d computeWorldPose(const gz::sim::Entity &entity,
@@ -856,8 +637,8 @@ double mergeAndSumIntervals(std::vector<std::pair<double, double>> _intervals)
 }
 
 // Length of the tag-anchor segment that lies inside obstacle AABBs, split
-// into untagged obstacles (fed to the generic thickness curve) and each
-// tagged material (fed to the Beer-Lambert material model). _materials is
+// into untagged obstacles (the generic material) and each tagged material,
+// each later multiplied by its attenuation rate. _materials is
 // optional (nullptr when the material model is disabled) and maps an
 // obstacle link to its material name, resolved once per PreUpdate call;
 // links missing from it count as untagged. Intervals are merged *within*
@@ -1070,10 +851,10 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	// Resolve each obstacle's material once per update (not once per
 	// anchor-tag/anchor-pair below) -- obstacles don't change material
 	// mid-update. Only obstacleLinks (walls/world geometry) are
-	// material-aware; robot bodyShadowLinks always use the generic thickness
-	// curve, since a vehicle's own body isn't an NLOS "material" a world
+	// material-aware; robot bodyShadowLinks always use the generic rate
+	// (capped), since a vehicle's own body isn't an NLOS "material" a world
 	// author would tag. Obstacles left out of the map (untagged, or tagged
-	// with a material not in materials_) use the generic thickness curve too.
+	// with a material not in materials_) are the generic material too.
 	std::unordered_map<gz::sim::Entity, std::string> obstacleMaterials;
 	if (this->enableMaterialAttenuation_)
 	{
@@ -1101,7 +882,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzwarn << "[UWBGazeboSystem] Unknown obstacle material '" << materialName
 					       << "' (known: " << knownMaterialList(this->materials_)
-					       << "). Treating it as an untagged obstacle.\n";
+					       << "). Treating it as generic.\n";
 				}
 				continue;
 			}
@@ -1112,10 +893,11 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	const std::unordered_map<gz::sim::Entity, std::string> *obstacleMaterialsPtr =
 		this->enableMaterialAttenuation_ ? &obstacleMaterials : nullptr;
 
-	// Geometry + channel state of one tag-anchor link: what the ray crosses
-	// and the resulting LOS/NLOS regime, noise stddev and dropout
-	// probability. Shared by TWR (one link per measurement) and TDOA (two
-	// links per measurement). See README.md, "Measurement model".
+	// Geometry + link budget of one tag-anchor link: what the ray crosses,
+	// the excess loss L = L_d + L_obs, and from it the LOS/NLOS regime, noise
+	// stddev and dropout probability. Shared by TWR (one link per
+	// measurement) and TDOA (two links per measurement). See README.md,
+	// "Measurement model".
 	auto evaluateLink = [&](const gz::sim::Entity &_tagEntity,
 	                        const gz::math::Vector3d &_tagPos,
 	                        const gz::sim::Entity &_anchorEntity,
@@ -1136,14 +918,25 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		for (const auto &[materialName, lengthM] : wallPath.materialLengthM)
 			link.materialLengthM += lengthM;
 
-		link.untaggedThicknessM =
-			wallPath.untaggedM + this->ComputeBodyShadowEquivalentThicknessM(bodyPath.untaggedM);
-		this->ComputeMaterialEffects(wallPath.materialLengthM, link.materialSeverity, link.materialBiasCm);
-		link.isNlos = this->IsNlos(link.untaggedThicknessM, link.materialSeverity);
+		// Untagged walls are the generic material.
+		std::unordered_map<std::string, double> materialLengthM = wallPath.materialLengthM;
+		if (wallPath.untaggedM > 0.0)
+			materialLengthM[kGenericMaterial] += wallPath.untaggedM;
+
+		double wallLossDb = 0.0;
+		this->ComputeObstacleEffects(materialLengthM, wallLossDb, link.biasCm);
+		const double bodyLossDb = std::min(
+			this->materials_.at(kGenericMaterial).attenuationDbPerM * bodyPath.untaggedM,
+			this->bodyShadowMaxLossDb_);
+
+		link.pathLossDb = this->PathLossDb(link.distanceM);
+		link.obstacleLossDb = wallLossDb + bodyLossDb;
+		link.isNlos = link.obstacleLossDb >= this->nlosMinLossDb_;
+
+		const double totalLossDb = link.pathLossDb + link.obstacleLossDb;
+		link.noiseStddevCm = this->ComputeNoiseStddevCm(totalLossDb);
 		link.dropoutProbability = this->ComputeDropoutProbability(
-			link.distanceM, link.untaggedThicknessM, link.materialSeverity);
-		link.noiseStddevCm = this->ComputeNoiseStddevCm(
-			link.distanceM, link.untaggedThicknessM, link.materialSeverity);
+			this->enableNlosDropout_ ? totalLossDb : link.pathLossDb);
 		return link;
 	};
 
@@ -1157,7 +950,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			std::normal_distribution<double>(this->noiseMeanCm_, _link.noiseStddevCm)(this->rng_);
 		if (_link.isNlos && noiseCm < 0.0)
 			noiseCm = -noiseCm;
-		return noiseCm + _link.materialBiasCm;
+		return noiseCm + _link.biasCm;
 	};
 
 	// Persistent bias drawn once per key from U(bias_min_cm, bias_max_cm).
@@ -1201,10 +994,10 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzmsg << "[UWBGazeboSystem] wall_blocked_thickness_m=" << link.wallThicknessM
 					      << ", body_shadow_blocked_thickness_m=" << link.bodyShadowThicknessM
-					      << ", effective_blocked_thickness_m=" << link.untaggedThicknessM
 					      << ", material_blocked_length_m=" << link.materialLengthM
-					      << ", material_severity=" << link.materialSeverity
-					      << ", material_bias_cm=" << link.materialBiasCm
+					      << ", path_loss_db=" << link.pathLossDb
+					      << ", obstacle_loss_db=" << link.obstacleLossDb
+					      << ", bias_cm=" << link.biasCm
 					      << " pair=" << pairId << "\n";
 				}
 

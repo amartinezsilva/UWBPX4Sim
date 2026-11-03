@@ -14,118 +14,77 @@
 # TDOA spread lands back on UTIL's measured one. Treat this preset as "in
 # the right ballpark for real DW1000 hardware", not an exact calibration.
 #
-# What's real-data-derived vs. carried over from the compiled-in defaults
-# is called out below. See tools/ for the analysis (not yet committed --
-# ask if you want the calibration script added to the repo).
-
-# Base GZ topics for simulated / ground-truth ranges.
-topic: /uwb_gz_simulator/distances
-ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
-
-# Additive Gaussian noise mean.
-# UTIL's dedicated LOS baseline trial (nlos/los-data, n=2723) measured a
-# mean error of +0.91cm -- negligible, left at 0.0.
-gaussian_noise_mean_cm: 0.0
-
-# Persistent per-pair bias.
-# UTIL's 12 independent LOS distance-test setups (dT1-dT12, same hardware
-# repositioned each time) show a per-setup mean error scattering with
-# mean -2.0cm, std 5.6cm. A +-2 sigma range around that gives roughly
-# [-13, +9]cm -- much tighter than the compiled-in [-27, +20]cm, which
-# looks like a conservative worst-case guess rather than a measured range.
-apply_pair_bias: true
-bias_min_cm: -13.0
-bias_max_cm: 9.0
-
-# NLOS-aware degradation.
-enable_nlos_dropout: true
-nlos_endpoint_margin_m: 0.02  # carried over (unvalidated by this dataset)
-
-# LOS distance-based dropout curve.
-# UTIL's identification dataset only covers 0.5-6.5m, well short of
-# where this plugin's compiled-in curve assumes dropout starts (10m) --
-# carried over unchanged; not contradicted, just not validated here.
-los_dropout_start_distance_m: 10.0
-los_dropout_end_distance_m: 70.0
-los_hard_dropout_distance_m: 75.0
-
-# Blocked-thickness thresholds.
-# UTIL doesn't report obstacle physical thickness (the paper's Table 2
-# /Fig. 7 name materials, not dimensions), and these thresholds are in the
-# *simulated world's own geometry* units anyway -- a different axis from
-# "which real material". Carried over unchanged. See the qualitative NLOS
-# material finding below for how to choose Gazebo obstacle materials that
-# map onto this curve sensibly.
-los_max_thickness_m: 0.10
-soft_nlos_max_thickness_m: 0.50
-blackout_thickness_m: 1.0
-hard_nlos_gap_ratio: 0.75  # carried over from the existing tuned setup
-
-# Dropout probability bounds.
-# Not recalibrated: would need a timestamp-gap analysis of the raw data
-# (sample counts alone don't reveal dropped readings) that hasn't been
-# done yet. Carried over unchanged.
-min_dropout_probability: 0.02
-max_dropout_probability: 0.90
-
-# Noise standard-deviation curve.
-# min_noise_stddev_cm: UTIL's implied single-link noise across the full
-# 0.5-6.5m sweep is 3.35-4.11cm with essentially no distance trend yet
-# (corr(distance, std) = -0.04) -- the compiled-in 12.0cm floor is ~3x
-# too high versus this real DW1000/LPS hardware at short range.
-min_noise_stddev_cm: 4.0
-# max_noise_stddev_cm, los_stddev_start/end_distance_m: UTIL's 6.5m max
-# range never reaches the compiled-in curve's assumed growth zone
-# (15-75m), so the *shape* of the long-range tail is still unvalidated by
-# this dataset -- carried over unchanged. (UTIL's NLOS tests hint the
-# real severe-degradation ceiling may be much higher than 50cm -- see the
-# material note below -- but that's NLOS-driven, not distance-driven, so
-# it isn't a direct substitute for calibrating this curve's far end.)
-max_noise_stddev_cm: 50.0
-los_stddev_start_distance_m: 15.0
-los_stddev_end_distance_m: 75.0
-
-# Extra weight given to blocked thickness vs. distance.
-nlos_dropout_thickness_extra_weight: 0.50  # carried over
-nlos_stddev_thickness_extra_weight: 0.50   # carried over
-
-# --- Qualitative NLOS material finding ---
-# UTIL's anAn/anTag NLOS material tests (cardboard, foam, wood, plastic,
-# metal) show materials do NOT degrade the signal uniformly, which this
-# plugin's single generic thickness curve can't distinguish:
-#   - cardboard, foam, wood: std stays ~5cm, essentially indistinguishable
-#     from LOS. Negligible degradation.
-#   - metal (anchor-to-tag link): severe -- mean bias -34cm, std 31cm,
-#     p95 |error| 46cm. Matches "hard NLOS" / near-blackout behavior.
-#   - some setups (plastic-anAn, wooden-cabinet-anTag) show wide,
-#     outlier-heavy scatter (std 94-131cm) with most samples still close
-#     to truth (p95 |error| only 10-18cm) -- looks like occasional large
-#     misses layered on an otherwise-fine signal, closer in character to
-#     this plugin's *dropout* mechanism than to widened Gaussian noise.
-#   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
-#     with tight scatter (-15.8cm bias, only 4.9cm std).
-# The material model below encodes these findings: tag obstacles with a
-# "__material_<name>" suffix (e.g. "shelf__material_wood") and the
-# compiled-in table (README.md, "Measurement model") makes cardboard/foam/
-# thin wood near-LOS, plastic moderate and metal severe (with a ~35cm
-# detour bias, matching the -34cm above), and gives dielectrics a
-# deterministic excess-delay bias (a ~0.38m wooden shelf -> ~15.7cm,
-# matching the shelf's shift). TDOA error signs depend on which leg is
-# blocked: NLOS on the reference anchor's leg pulls d_ij negative, on the
-# other anchor's leg positive. The outlier-heavy plastic/cabinet mode is
-# still not modelled.
+# What's real-data-derived vs. carried over from eliko_identification is
+# called out below.
 
 # Ranging mode: TDOA, matching UTIL's own infrastructure (Bitcraze LPS).
 uwb_mode: tdoa
+topic: /uwb_gz_simulator/distances
+ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
 
-# Material-aware NLOS model: on, using the compiled-in UTIL-informed
-# material table (override entries as material_<name>_penetration_m /
-# material_<name>_permittivity). Untagged obstacles keep the generic
-# thickness curve above, so worlds without material tags are unaffected.
+# Link budget and its long-range shape: UTIL's identification dataset only
+# covers 0.5-6.5 m (L < 17 dB), well short of where noise growth or dropout
+# start -- carried over from eliko_identification; not contradicted, just
+# not validated here.
+path_loss_exponent: 2.0
+max_link_loss_db: 37.5
+noise_start_loss_db: 23.5
+noise_end_loss_db: 37.5
+dropout_mid_loss_db: 35.5
+dropout_width_db: 1.4
+
+# Noise floor: UTIL's implied single-link noise across the full 0.5-6.5 m
+# sweep is 3.35-4.11 cm with essentially no distance trend
+# (corr(distance, std) = -0.04). max_noise_stddev_cm carried over.
+min_noise_stddev_cm: 4.0
+max_noise_stddev_cm: 50.0
+
+# Dropout floor: not recalibrated -- would need a timestamp-gap analysis of
+# the raw data (sample counts alone don't reveal dropped readings).
+min_dropout_probability: 0.02
+enable_nlos_dropout: true
+
+# Obstacles: carried over.
+nlos_endpoint_margin_m: 0.02
+nlos_min_loss_db: 3.0
+body_shadow_max_loss_db: 10.0
+
+# Materials: on. Bitcraze LPS runs the DW1000 on channel 2 (~4 GHz) by
+# default -- verify against the dataset's setup if exact rates matter.
+#
+# UTIL's anAn/anTag NLOS material tests (cardboard, foam, wood, plastic,
+# metal) show materials do NOT degrade the signal uniformly:
+#   - cardboard, foam, wood: std stays ~5cm, essentially indistinguishable
+#     from LOS. Negligible degradation.
+#   - metal (anchor-to-tag link): severe -- mean bias -34cm, std 31cm,
+#     p95 |error| 46cm.
+#   - some setups (plastic-anAn, wooden-cabinet-anTag) show wide,
+#     outlier-heavy scatter (std 94-131cm) with most samples still close
+#     to truth (p95 |error| only 10-18cm) -- occasional large misses on an
+#     otherwise-fine signal. Not modelled.
+#   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
+#     with tight scatter (-15.8cm bias, only 4.9cm std).
+# Tag obstacles with a "__material_<name>" suffix (e.g. "shelf__material_wood"):
+# the low-loss dielectrics stay near-LOS at short range, metal adds a
+# detour loss and a ~35 cm detour bias (matching the -34 cm above), and a
+# ~0.38 m wooden shelf's excess delay is ~15.6 cm (matching the shelf's
+# shift). TDOA error signs depend on which leg is blocked: NLOS on the
+# reference anchor's leg pulls d_ij negative, on the other anchor's leg
+# positive.
 enable_material_attenuation: true
-material_los_max_severity: 0.05
-nlos_dropout_material_extra_weight: 1.0
-nlos_stddev_material_extra_weight: 1.0
+carrier_frequency_ghz: 4.0
+material_metal_detour_loss_db: 20.0
 material_metal_detour_bias_cm: 35.0
+
+# Mean and persistent bias.
+# UTIL's dedicated LOS baseline trial (nlos/los-data, n=2723) measured a
+# mean error of +0.91cm -- negligible, left at 0.0. Its 12 independent LOS
+# distance-test setups (dT1-dT12, same hardware repositioned each time)
+# show a per-setup mean error scattering with mean -2.0cm, std 5.6cm; a
+# +-2 sigma range around that gives roughly [-13, +9]cm.
+gaussian_noise_mean_cm: 0.0
+apply_pair_bias: true
+bias_min_cm: -13.0
+bias_max_cm: 9.0
