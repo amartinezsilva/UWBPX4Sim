@@ -1,5 +1,11 @@
 # UWBPX4Sim
 
+:pushpin: This work has been presented at the [1st Workshop on Robot Meets GNSS and Ranging for Seamless Autonomy](https://robotmeetsranging.tech/) during ICRA 2026!
+
+:pushpin: This work has been featured in the [ROSCon Spain 2026](https://roscon.org.es/roscon2026/ROSConES2026.html) official program!
+
+![](images/Logo.png)
+
 A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot teams integrated with ROS 2, Gazebo Harmonic and PX4 SITL. This is a standalone repo that is complementary to the work [Radio-based Multi-Robot Odometry and Relative Localization](https://github.com/amartinezsilva/mr-radio-localization?tab=readme-ov-file), containing all simulation-based tools used in the main work.
 
 It includes:
@@ -27,7 +33,7 @@ It includes:
 - `worlds/`: Gazebo worlds used in the experiments
 - `tools/`: helper scripts for sensor layout and mesh generation
 
-![](images/SimDiagram.png)
+![](images/SimExtendedDiagram.drawio.png)
 
 ## Running with Docker
 
