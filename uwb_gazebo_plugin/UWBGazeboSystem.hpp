@@ -4,6 +4,7 @@
 #include <gz/transport/Node.hh>
 #include <gz/transport/Publisher.hh>
 #include <unordered_map>
+#include <unordered_set>
 #include <random>
 #include <chrono>
 #include <string>
@@ -34,6 +35,17 @@ public:
   void PreUpdate(const gz::sim::UpdateInfo &info,
                  gz::sim::EntityComponentManager &ecm) override;
 
+  /// \brief Electromagnetic properties of a tagged obstacle material.
+  struct MaterialProperties
+  {
+    /// \brief Beer-Lambert penetration length lambda, in meters: the chord
+    /// length through this material at which its severity reaches 1 - 1/e.
+    double penetrationM;
+    /// \brief Relative permittivity eps_r (dielectrics only), which sets the
+    /// excess-delay bias l (sqrt(eps_r) - 1).
+    double permittivity;
+  };
+
 private:
   /// \brief Maps effective blocked thickness to a normalized NLOS severity.
   /// \details Returns a value in the range [0, 1]. LOS conditions map to 0 and
@@ -53,33 +65,52 @@ private:
   /// \return Equivalent blocked thickness used by the NLOS model.
   double ComputeBodyShadowEquivalentThicknessM(double bodyBlockedThicknessM) const;
 
-  /// \brief Computes the measurement-dropout probability for a pair.
-  /// \details In LOS, dropout depends only on distance. In NLOS, dropout is
-  /// computed from the distance severity baseline plus a configurable weighted
-  /// thickness severity term, with complete blackout enforced beyond the
-  /// configured limits.
+  /// \brief Computes the severity and bias contributed by tagged materials.
+  /// \details Severity is Beer-Lambert, s_mat = 1 - exp(-sum_k l_k/lambda_k).
+  /// Bias is the dielectrics' excess delay, sum_k l_k (sqrt(eps_k) - 1), plus
+  /// metalDetourBiasCm_ once if any metal is crossed.
+  /// \param[in] materialLengthM Chord length through each material, in meters.
+  /// \param[out] severity Material severity s_mat in [0, 1).
+  /// \param[out] biasCm Deterministic material bias, in centimeters.
+  void ComputeMaterialEffects(const std::unordered_map<std::string, double> &materialLengthM,
+                              double &severity,
+                              double &biasCm) const;
+
+  /// \brief Whether a link is NLOS: untagged thickness above
+  /// los_max_thickness_m, or material severity above material_los_max_severity.
+  bool IsNlos(double untaggedThicknessM, double materialSeverity) const;
+
+  /// \brief Combined obstacle severity of an NLOS link, before distance.
+  /// \details min(1, g_tau s_tau(tau)) (+) min(1, g_mat s_mat'), with
+  /// g = 1 + extra weight, s_mat' the material severity re-zeroed at the
+  /// material LOS threshold, and (+) the probabilistic-OR combination.
+  double ObstacleSeverity(double untaggedThicknessM,
+                          double materialSeverity,
+                          double thicknessExtraWeight,
+                          double materialExtraWeight) const;
+
+  /// \brief Computes the measurement-dropout probability for a link.
+  /// \details In LOS, dropout depends only on distance. In NLOS, it combines
+  /// the distance severity with ObstacleSeverity, with complete blackout
+  /// enforced beyond the configured limits.
   /// \param[in] distanceM Anchor-tag separation in meters.
-  /// \param[in] blockedThicknessM Effective blocked thickness in meters.
+  /// \param[in] untaggedThicknessM Untagged walls + body-shadow thickness, in meters.
+  /// \param[in] materialSeverity Material severity s_mat (0 if none).
   /// \return Dropout probability in the range [0, 1].
-  double ComputeDropoutProbability(double distanceM, double blockedThicknessM) const;
+  double ComputeDropoutProbability(double distanceM,
+                                   double untaggedThicknessM,
+                                   double materialSeverity) const;
 
   /// \brief Computes the standard deviation of the additive range noise.
-  /// \details In LOS, the standard deviation grows with distance only. In NLOS,
-  /// it is computed from the distance severity baseline plus a configurable
-  /// weighted thickness severity term.
+  /// \details In LOS, the standard deviation grows with distance only. In
+  /// NLOS, it combines the distance severity with ObstacleSeverity.
   /// \param[in] distanceM Anchor-tag separation in meters.
-  /// \param[in] blockedThicknessM Effective blocked thickness in meters.
+  /// \param[in] untaggedThicknessM Untagged walls + body-shadow thickness, in meters.
+  /// \param[in] materialSeverity Material severity s_mat (0 if none).
   /// \return Noise standard deviation in centimeters.
-  double ComputeNoiseStddevCm(double distanceM, double blockedThicknessM) const;
-
-  /// \brief Looks up the attenuation multiplier for a material name.
-  /// \details Falls back to materialAttenuationDefault_ for names not
-  /// present in materialAttenuation_ (including when material attenuation
-  /// is disabled, which leaves the map empty by construction).
-  /// \param[in] materialName Lowercase material keyword, or empty.
-  /// \return Attenuation multiplier applied to that obstacle's raw
-  /// AABB-intersection length before the thickness-severity curve.
-  double MaterialAttenuationFor(const std::string &materialName) const;
+  double ComputeNoiseStddevCm(double distanceM,
+                              double untaggedThicknessM,
+                              double materialSeverity) const;
 
   /// \brief Validates and normalizes user-provided plugin parameters.
   /// \details This method enforces valid ordering of thresholds, clamps values
@@ -130,7 +161,8 @@ private:
   // Ignore intersections too close to endpoints to avoid self-hit artifacts.
   double nlosEndpointMarginM_{0.02};
   // In NLOS, thickness contributes at least as much as distance. These
-  // normalized extra-weight parameters add to the fixed baseline gain of 1.0.
+  // normalized extra-weight parameters add to the fixed baseline gain of 1.0
+  // applied to distance.
   double nlosDropoutThicknessExtraWeight_{0.50};
   double nlosStddevThicknessExtraWeight_{0.50};
 
@@ -147,24 +179,31 @@ private:
   std::string tdoaTopic_ = "/uwb_gz_simulator/tdoa";
   std::string tdoaGroundTruthTopic_ = "/uwb_gz_simulator/tdoa_ground_truth";
 
-  // --- Material-aware NLOS attenuation (opt-in, off by default so existing
-  // worlds/layouts that don't name obstacles by material keep their current
-  // behaviour byte-for-byte). When enabled, each obstacle link's own
-  // AABB-intersection length is scaled by its material's attenuation
-  // multiplier (relative to the generic/unscaled thickness this plugin
-  // already used, i.e. 1.0) before entering the existing thickness-severity
-  // curve -- see ThicknessSeverity, ComputeNoiseStddevCm,
-  // ComputeDropoutProbability, which are unchanged.
+  // --- Material-aware NLOS model (opt-in, off by default so existing
+  // worlds/layouts that don't name obstacles by material keep their exact
+  // behaviour). When enabled, obstacles whose link or model name carries a
+  // "__material_<name>" suffix (see extractMaterialName in the .cpp) leave
+  // the generic thickness curve and enter a Beer-Lambert material term
+  // instead, weighted above thickness, plus a deterministic material bias.
+  // Untagged obstacles keep the generic thickness curve either way. See
+  // README.md, "Measurement model".
   bool enableMaterialAttenuation_{false};
-  // Applied to any obstacle whose name doesn't carry a recognized
-  // "__material_<name>" suffix (see ExtractMaterialName in the .cpp) --
-  // 1.0 reproduces the old undifferentiated behaviour for untagged obstacles.
-  double materialAttenuationDefault_{1.0};
+  // Material severity at or below which a link with only tagged obstacles
+  // still counts as LOS (the material analogue of losMaxThicknessM_).
+  double materialLosMaxSeverity_{0.05};
+  // Extra weight of the material term over the baseline gain of 1.0; kept
+  // >= the matching thickness extra weight (material > thickness > distance).
+  double nlosDropoutMaterialExtraWeight_{1.0};
+  double nlosStddevMaterialExtraWeight_{1.0};
+  // Bias added once to a link crossing any metal: the first path detours
+  // around the conductor instead of going through it.
+  double metalDetourBiasCm_{35.0};
   // Keyed by material name (lowercase, matching the "__material_<name>"
-  // suffix). Populated in Configure() from fixed "material_attenuation_
-  // <name>" SDF parameters -- not a free-form map, so there's no custom SDF
-  // parsing involved, just more scalar Get<double> calls like every other
-  // parameter here. Unrecognized names fall back to materialAttenuationDefault_.
-  std::unordered_map<std::string, double> materialAttenuation_;
+  // suffix). Starts from the .cpp's defaultMaterials() in Configure(), each
+  // entry overridable through scalar "material_<name>_penetration_m" /
+  // "material_<name>_permittivity" SDF parameters. Obstacles tagged with a
+  // name not in here are treated as untagged (warned once per name).
+  std::unordered_map<std::string, MaterialProperties> materials_;
+  std::unordered_set<std::string> warnedUnknownMaterials_;
 };
 }

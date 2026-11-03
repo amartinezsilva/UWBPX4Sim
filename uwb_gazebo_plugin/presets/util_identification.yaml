@@ -5,13 +5,14 @@
 #
 # IMPORTANT CAVEAT: UTIL is a TDOA dataset -- it reports d12 = ||p-a2|| -
 # ||p-a1|| (already in meters, per the paper's Eq. 1), not a direct
-# single-anchor-tag range. This plugin currently only models single-link
-# TWR-style ranges. The noise values below are derived from the TDOA error
+# single-anchor-tag range. This plugin's noise parameters are per link
+# (one tag-anchor leg); in uwb_mode: tdoa (set below) each measurement
+# combines two legs. The noise values below are derived from the TDOA error
 # by assuming the two underlying links' errors are independent and
 # identically distributed (Var(TDOA) = 2*sigma_link^2, so
-# sigma_link = std(TDOA error) / sqrt(2)) -- a reasonable but approximate
-# stand-in, not a direct per-link measurement. Treat this preset as "in the
-# right ballpark for real DW1000 hardware", not an exact calibration.
+# sigma_link = std(TDOA error) / sqrt(2)) -- so in tdoa mode the simulated
+# TDOA spread lands back on UTIL's measured one. Treat this preset as "in
+# the right ballpark for real DW1000 hardware", not an exact calibration.
 #
 # What's real-data-derived vs. carried over from the compiled-in defaults
 # is called out below. See tools/ for the analysis (not yet committed --
@@ -88,7 +89,7 @@ los_stddev_end_distance_m: 75.0
 nlos_dropout_thickness_extra_weight: 0.50  # carried over
 nlos_stddev_thickness_extra_weight: 0.50   # carried over
 
-# --- Qualitative NLOS material finding (not an encodable param yet) ---
+# --- Qualitative NLOS material finding ---
 # UTIL's anAn/anTag NLOS material tests (cardboard, foam, wood, plastic,
 # metal) show materials do NOT degrade the signal uniformly, which this
 # plugin's single generic thickness curve can't distinguish:
@@ -102,11 +103,29 @@ nlos_stddev_thickness_extra_weight: 0.50   # carried over
 #     misses layered on an otherwise-fine signal, closer in character to
 #     this plugin's *dropout* mechanism than to widened Gaussian noise.
 #   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
-#     with tight scatter (-15.8cm bias, only 4.9cm std) -- a mode this
-#     plugin can't currently produce at all, since apply_pair_bias draws
-#     one fixed value at pair-creation time, never conditioned on
-#     real-time LOS/NLOS state.
-# When placing NLOS obstacles in a Gazebo world to exercise this preset,
-# treat cardboard/foam/wood obstacles as near-LOS and metal obstacles as
-# driving straight toward blackout_thickness_m, rather than assuming a
-# uniform "more material = more degraded" relationship.
+#     with tight scatter (-15.8cm bias, only 4.9cm std).
+# The material model below encodes these findings: tag obstacles with a
+# "__material_<name>" suffix (e.g. "shelf__material_wood") and the
+# compiled-in table (README.md, "Measurement model") makes cardboard/foam/
+# thin wood near-LOS, plastic moderate and metal severe (with a ~35cm
+# detour bias, matching the -34cm above), and gives dielectrics a
+# deterministic excess-delay bias (a ~0.38m wooden shelf -> ~15.7cm,
+# matching the shelf's shift). TDOA error signs depend on which leg is
+# blocked: NLOS on the reference anchor's leg pulls d_ij negative, on the
+# other anchor's leg positive. The outlier-heavy plastic/cabinet mode is
+# still not modelled.
+
+# Ranging mode: TDOA, matching UTIL's own infrastructure (Bitcraze LPS).
+uwb_mode: tdoa
+tdoa_topic: /uwb_gz_simulator/tdoa
+tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+
+# Material-aware NLOS model: on, using the compiled-in UTIL-informed
+# material table (override entries as material_<name>_penetration_m /
+# material_<name>_permittivity). Untagged obstacles keep the generic
+# thickness curve above, so worlds without material tags are unaffected.
+enable_material_attenuation: true
+material_los_max_severity: 0.05
+nlos_dropout_material_extra_weight: 1.0
+nlos_stddev_material_extra_weight: 1.0
+material_metal_detour_bias_cm: 35.0

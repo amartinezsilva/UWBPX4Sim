@@ -63,13 +63,14 @@ uwb_mode: twr
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
 
-# Material-aware NLOS attenuation: off, matching this preset's baseline
-# (undifferentiated-obstacle) behaviour. See presets/util_identification.yaml
-# for UTIL-informed per-material multipliers if you want to turn this on.
+# Material-aware NLOS model: off, matching this preset's baseline
+# (undifferentiated-obstacle) behaviour -- every obstacle uses the generic
+# thickness curve above. When turned on, the per-material penetration
+# lengths/permittivities default to the plugin's compiled-in table (see
+# README.md, "Measurement model"); override any of them here as
+# material_<name>_penetration_m / material_<name>_permittivity.
 enable_material_attenuation: false
-material_attenuation_default: 1.0
-material_attenuation_metal: 1.0
-material_attenuation_wood: 0.08
-material_attenuation_cardboard: 0.03
-material_attenuation_plastic: 0.15
-material_attenuation_foam: 0.02
+material_los_max_severity: 0.05
+nlos_dropout_material_extra_weight: 1.0
+nlos_stddev_material_extra_weight: 1.0
+material_metal_detour_bias_cm: 35.0

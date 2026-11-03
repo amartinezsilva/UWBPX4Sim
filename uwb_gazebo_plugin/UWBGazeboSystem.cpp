@@ -4,6 +4,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <sstream>
 #include <string>
 #include <unordered_set>
 #include <utility>
@@ -69,22 +70,77 @@ constexpr double kOrderingEpsilon = 1e-6;
     return (_x - _xStart) / (_xEnd - _xStart);
   }
 
-  // Combine the LOS distance baseline with the NLOS thickness effect while
-  // preserving the remaining headroom. This avoids early saturation and keeps
-  // more contrast between LOS / Soft NLOS / Hard NLOS.
-  double combineNlosSeverity(const double _distanceSeverity,
-                             const double _thicknessSeverity,
-                             const double _thicknessExtraWeight)
+  // Probabilistic-OR combination of two severities in [0,1]:
+  // a (+) b = a + (1 - a) b = 1 - (1 - a)(1 - b). It only fills the headroom
+  // the other term leaves (no early saturation), but it's symmetric -- it
+  // gives neither input priority. Priority comes from the gains applied to
+  // each term before combining (see UWBGazeboSystem::ObstacleSeverity).
+  double orCombine(const double _a, const double _b)
   {
-    const double distanceSeverity = std::clamp(_distanceSeverity, 0.0, 1.0);
-    const double weightedThicknessSeverity = std::clamp(
-        (1.0 + _thicknessExtraWeight) * _thicknessSeverity,
-        0.0,
-        1.0);
-
-    return distanceSeverity +
-           ((1.0 - distanceSeverity) * weightedThicknessSeverity);
+    const double a = std::clamp(_a, 0.0, 1.0);
+    const double b = std::clamp(_b, 0.0, 1.0);
+    return a + ((1.0 - a) * b);
   }
+
+  // The one conductor in the material table: it isn't penetrated like a
+  // dielectric (no permittivity, no excess-delay bias); the first path
+  // detours around it instead (UWBGazeboSystem::metalDetourBiasCm_).
+  const std::string kConductorMaterial = "metal";
+
+  // Default material table: penetration length lambda (m) and relative
+  // permittivity eps_r. eps_r are typical few-GHz values from the
+  // literature; lambda values are chosen to reproduce the qualitative
+  // ordering of the UTIL dataset's NLOS material tests (cardboard/foam/
+  // wood ~ LOS, metal severe). See README.md, "Measurement model".
+  std::unordered_map<std::string, UWBGazeboSystem::MaterialProperties> defaultMaterials()
+  {
+    return {
+        {"metal", {0.0005, 1.0}},
+        {"concrete", {0.5, 5.0}},
+        {"glass", {0.5, 6.0}},
+        {"wood", {2.0, 2.0}},
+        {"plastic", {1.0, 2.5}},
+        {"cardboard", {10.0, 1.2}},
+        {"foam", {20.0, 1.05}},
+    };
+  }
+
+  std::string knownMaterialList(
+      const std::unordered_map<std::string, UWBGazeboSystem::MaterialProperties> &_materials)
+  {
+    std::vector<std::string> names;
+    for (const auto &[name, props] : _materials)
+      names.push_back(name);
+    std::sort(names.begin(), names.end());
+
+    std::string list;
+    for (const auto &name : names)
+      list += (list.empty() ? "" : ", ") + name;
+    return list;
+  }
+
+  // What a tag-anchor segment crosses: total chord length through untagged
+  // obstacles, and per tagged material.
+  struct BlockedPath
+  {
+    double untaggedM{0.0};
+    std::unordered_map<std::string, double> materialLengthM;
+  };
+
+  // Channel state of one tag-anchor link (see PreUpdate's evaluateLink).
+  struct LinkState
+  {
+    double distanceM{0.0};
+    double wallThicknessM{0.0};        // untagged wall chord length (raw)
+    double bodyShadowThicknessM{0.0};  // robot-body chord length (raw)
+    double materialLengthM{0.0};       // total tagged-material chord length
+    double untaggedThicknessM{0.0};    // tau: untagged walls + body-shadow equivalent
+    double materialSeverity{0.0};      // s_mat = 1 - exp(-sum l_k / lambda_k)
+    double materialBiasCm{0.0};        // beta: excess delay + metal detour
+    bool isNlos{false};
+    double dropoutProbability{0.0};
+    double noiseStddevCm{0.0};
+  };
 
   // Create a topic name based on tag and anchor id pairId (.e.g. a1t2 for anchor 1 - tag2), and a common namespace
   std::string makePairTopic(const std::string &_baseTopic, const std::string &_pairId)
@@ -170,31 +226,97 @@ double UWBGazeboSystem::ComputeBodyShadowEquivalentThicknessM(
   return std::min(_bodyBlockedThicknessM, this->softNlosMaxThicknessM_);
 }
 
-double UWBGazeboSystem::ComputeDropoutProbability(const double _distanceM,
-                                                  const double _blockedThicknessM) const
+void UWBGazeboSystem::ComputeMaterialEffects(
+    const std::unordered_map<std::string, double> &_materialLengthM,
+    double &_severity,
+    double &_biasCm) const
 {
-  const double losDropoutProbability = exponentialRamp(_distanceM,
-                                                       this->losDropoutStartDistanceM_,
-                                                       this->losDropoutEndDistanceM_,
-                                                       this->minDropoutProbability_,
-                                                       this->maxDropoutProbability_);
+  // Beer-Lambert: A = sum_k l_k / lambda_k, s_mat = 1 - exp(-A). The
+  // material sets lambda over orders of magnitude (mm for metal, tens of m
+  // for foam), the chord length only enters through l/lambda -- which is
+  // what makes material more influential than thickness.
+  double attenuation = 0.0;
+  bool crossesConductor = false;
+  _biasCm = 0.0;
 
+  for (const auto &[materialName, lengthM] : _materialLengthM)
+  {
+    const auto it = this->materials_.find(materialName);
+    if (it == this->materials_.end() || lengthM <= 0.0)
+      continue;
+
+    attenuation += lengthM / it->second.penetrationM;
+
+    if (materialName == kConductorMaterial)
+    {
+      crossesConductor = true;
+      continue;
+    }
+
+    // Excess delay of propagating through a dielectric at c/sqrt(eps_r)
+    // instead of c: beta = l (sqrt(eps_r) - 1).
+    _biasCm += lengthM * (std::sqrt(it->second.permittivity) - 1.0) * 100.0;
+  }
+
+  // Applied once per link, however many metal obstacles it crosses: the
+  // first path detours around the whole obstruction.
+  if (crossesConductor)
+    _biasCm += this->metalDetourBiasCm_;
+
+  _severity = 1.0 - std::exp(-attenuation);
+}
+
+bool UWBGazeboSystem::IsNlos(const double _untaggedThicknessM,
+                             const double _materialSeverity) const
+{
+  return (_untaggedThicknessM > this->losMaxThicknessM_) ||
+         (_materialSeverity > this->materialLosMaxSeverity_);
+}
+
+double UWBGazeboSystem::ObstacleSeverity(const double _untaggedThicknessM,
+                                         const double _materialSeverity,
+                                         const double _thicknessExtraWeight,
+                                         const double _materialExtraWeight) const
+{
+  // Untagged obstacles: generic thickness curve, gain g_tau = 1 + w_tau.
+  const double thicknessTerm = std::min(
+      1.0, (1.0 + _thicknessExtraWeight) * this->ThicknessSeverity(_untaggedThicknessM));
+
+  // Tagged materials: Beer-Lambert severity, re-zeroed at the material LOS
+  // threshold (so the term is continuous where a link turns NLOS), gain
+  // g_mat = 1 + w_mat >= g_tau.
+  double materialTerm = 0.0;
+  if (_materialSeverity > this->materialLosMaxSeverity_)
+  {
+    const double rezeroed = (_materialSeverity - this->materialLosMaxSeverity_) /
+                            (1.0 - this->materialLosMaxSeverity_);
+    materialTerm = std::min(1.0, (1.0 + _materialExtraWeight) * rezeroed);
+  }
+
+  return orCombine(thicknessTerm, materialTerm);
+}
+
+double UWBGazeboSystem::ComputeDropoutProbability(const double _distanceM,
+                                                  const double _untaggedThicknessM,
+                                                  const double _materialSeverity) const
+{
   if (_distanceM > this->losHardDropoutDistanceM_)
     return 1.0;
 
-  if (this->enableNlosDropout_ && _blockedThicknessM > this->losMaxThicknessM_)
+  if (this->enableNlosDropout_ && this->IsNlos(_untaggedThicknessM, _materialSeverity))
   {
-    if (_blockedThicknessM >= this->blackoutThicknessM_)
+    if (_untaggedThicknessM >= this->blackoutThicknessM_)
       return 1.0;
 
     const double distanceSeverity = normalizedRamp(_distanceM,
                                                    this->losDropoutStartDistanceM_,
                                                    this->losDropoutEndDistanceM_);
-    const double nlosThicknessSeverity = this->ThicknessSeverity(_blockedThicknessM);
-    const double combinedSeverity = combineNlosSeverity(
+    const double combinedSeverity = orCombine(
         distanceSeverity,
-        nlosThicknessSeverity,
-        this->nlosDropoutThicknessExtraWeight_);
+        this->ObstacleSeverity(_untaggedThicknessM,
+                               _materialSeverity,
+                               this->nlosDropoutThicknessExtraWeight_,
+                               this->nlosDropoutMaterialExtraWeight_));
 
     return exponentialRamp(combinedSeverity,
                            0.0,
@@ -203,26 +325,32 @@ double UWBGazeboSystem::ComputeDropoutProbability(const double _distanceM,
                            this->maxDropoutProbability_);
   }
 
-  return losDropoutProbability;
+  return exponentialRamp(_distanceM,
+                         this->losDropoutStartDistanceM_,
+                         this->losDropoutEndDistanceM_,
+                         this->minDropoutProbability_,
+                         this->maxDropoutProbability_);
 }
 
 double UWBGazeboSystem::ComputeNoiseStddevCm(const double _distanceM,
-                                             const double _blockedThicknessM) const
+                                             const double _untaggedThicknessM,
+                                             const double _materialSeverity) const
 {
   const double distanceSeverity = normalizedRamp(_distanceM,
                                                  this->losStddevStartDistanceM_,
                                                  this->losStddevEndDistanceM_);
 
-  if (_blockedThicknessM > this->losMaxThicknessM_)
+  if (this->IsNlos(_untaggedThicknessM, _materialSeverity))
   {
-    if (_blockedThicknessM >= this->blackoutThicknessM_)
+    if (_untaggedThicknessM >= this->blackoutThicknessM_)
       return this->maxNoiseStddevCm_;
 
-    const double nlosThicknessSeverity = this->ThicknessSeverity(_blockedThicknessM);
-    const double combinedSeverity = combineNlosSeverity(
+    const double combinedSeverity = orCombine(
         distanceSeverity,
-        nlosThicknessSeverity,
-        this->nlosStddevThicknessExtraWeight_);
+        this->ObstacleSeverity(_untaggedThicknessM,
+                               _materialSeverity,
+                               this->nlosStddevThicknessExtraWeight_,
+                               this->nlosStddevMaterialExtraWeight_));
 
     return exponentialRamp(combinedSeverity,
                            0.0,
@@ -236,18 +364,6 @@ double UWBGazeboSystem::ComputeNoiseStddevCm(const double _distanceM,
                          1.0,
                          this->minNoiseStddevCm_,
                          this->maxNoiseStddevCm_);
-}
-
-double UWBGazeboSystem::MaterialAttenuationFor(const std::string &_materialName) const
-{
-  if (_materialName.empty())
-    return this->materialAttenuationDefault_;
-
-  const auto it = this->materialAttenuation_.find(_materialName);
-  if (it == this->materialAttenuation_.end())
-    return this->materialAttenuationDefault_;
-
-  return it->second;
 }
 
 void UWBGazeboSystem::ValidateAndNormalizeParameters()
@@ -369,19 +485,64 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
     this->tdoaGroundTruthTopic_ = "/uwb_gz_simulator/tdoa_ground_truth";
   }
 
-  if (this->materialAttenuationDefault_ < 0.0)
+  const bool materialLosWasOutOfRange =
+      (this->materialLosMaxSeverity_ < 0.0) || (this->materialLosMaxSeverity_ > 0.99);
+  this->materialLosMaxSeverity_ = std::clamp(this->materialLosMaxSeverity_, 0.0, 0.99);
+  if (materialLosWasOutOfRange)
   {
-    gzwarn << "[UWBGazeboSystem] material_attenuation_default < 0.0. Clamping to 0.0.\n";
-    this->materialAttenuationDefault_ = 0.0;
+    gzwarn << "[UWBGazeboSystem] material_los_max_severity out of [0,0.99]. Clamped to "
+           << this->materialLosMaxSeverity_ << ".\n";
   }
 
-  for (auto &[materialName, multiplier] : this->materialAttenuation_)
+  // Material extra weights live in [0,2] (gain 1..3), and must be at least
+  // the matching thickness weight: material is meant to be the most
+  // influential NLOS factor, then thickness, then distance.
+  auto normalizeMaterialWeight = [](double &_weight,
+                                    const double _thicknessWeight,
+                                    const char *_name,
+                                    const char *_thicknessName)
   {
-    if (multiplier < 0.0)
+    if (_weight < 0.0 || _weight > 2.0)
     {
-      gzwarn << "[UWBGazeboSystem] material_attenuation_" << materialName
-             << " < 0.0. Clamping to 0.0.\n";
-      multiplier = 0.0;
+      _weight = std::clamp(_weight, 0.0, 2.0);
+      gzwarn << "[UWBGazeboSystem] " << _name << " out of [0,2]. Clamped to " << _weight << ".\n";
+    }
+    if (_weight < _thicknessWeight)
+    {
+      gzwarn << "[UWBGazeboSystem] " << _name << " < " << _thicknessName
+             << " (material must weigh at least as much as thickness). Raising to "
+             << _thicknessWeight << ".\n";
+      _weight = _thicknessWeight;
+    }
+  };
+  normalizeMaterialWeight(this->nlosDropoutMaterialExtraWeight_,
+                          this->nlosDropoutThicknessExtraWeight_,
+                          "nlos_dropout_material_extra_weight",
+                          "nlos_dropout_thickness_extra_weight");
+  normalizeMaterialWeight(this->nlosStddevMaterialExtraWeight_,
+                          this->nlosStddevThicknessExtraWeight_,
+                          "nlos_stddev_material_extra_weight",
+                          "nlos_stddev_thickness_extra_weight");
+
+  if (this->metalDetourBiasCm_ < 0.0)
+  {
+    gzwarn << "[UWBGazeboSystem] material_metal_detour_bias_cm < 0.0. Clamping to 0.0.\n";
+    this->metalDetourBiasCm_ = 0.0;
+  }
+
+  for (auto &[materialName, props] : this->materials_)
+  {
+    if (props.penetrationM < kPositiveEpsilon)
+    {
+      gzwarn << "[UWBGazeboSystem] material_" << materialName
+             << "_penetration_m must be > 0. Clamping to " << kPositiveEpsilon << ".\n";
+      props.penetrationM = kPositiveEpsilon;
+    }
+    if (props.permittivity < 1.0)
+    {
+      gzwarn << "[UWBGazeboSystem] material_" << materialName
+             << "_permittivity < 1.0 (faster than light). Clamping to 1.0.\n";
+      props.permittivity = 1.0;
     }
   }
 }
@@ -489,19 +650,51 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   if (_sdf && _sdf->HasElement("enable_material_attenuation"))
     this->enableMaterialAttenuation_ = _sdf->Get<bool>("enable_material_attenuation");
 
-  if (_sdf && _sdf->HasElement("material_attenuation_default"))
-    this->materialAttenuationDefault_ = _sdf->Get<double>("material_attenuation_default");
+  if (_sdf && _sdf->HasElement("material_los_max_severity"))
+    this->materialLosMaxSeverity_ = _sdf->Get<double>("material_los_max_severity");
 
-  // Fixed material set (matching the UTIL dataset's NLOS obstacle types),
-  // not a free-form table -- see the materialAttenuation_ comment in the
-  // header for why. Add more "material_attenuation_<name>" entries here
-  // (and in params.yaml) if a world needs a material not listed.
-  this->materialAttenuation_.clear();
-  for (const char *materialName : {"metal", "wood", "cardboard", "plastic", "foam"})
+  if (_sdf && _sdf->HasElement("nlos_dropout_material_extra_weight"))
   {
-    const std::string paramName = std::string("material_attenuation_") + materialName;
+    this->nlosDropoutMaterialExtraWeight_ =
+        _sdf->Get<double>("nlos_dropout_material_extra_weight");
+  }
+
+  if (_sdf && _sdf->HasElement("nlos_stddev_material_extra_weight"))
+  {
+    this->nlosStddevMaterialExtraWeight_ =
+        _sdf->Get<double>("nlos_stddev_material_extra_weight");
+  }
+
+  if (_sdf && _sdf->HasElement("material_metal_detour_bias_cm"))
+    this->metalDetourBiasCm_ = _sdf->Get<double>("material_metal_detour_bias_cm");
+
+  // Fixed material set (defaultMaterials()), not a free-form table: each
+  // entry is overridable through scalar "material_<name>_penetration_m" /
+  // "material_<name>_permittivity" parameters (no permittivity for the
+  // conductor). Add a material to defaultMaterials() (and to gui/app.py's
+  // PARAM_GROUPS and the presets) if a world needs one not listed.
+  this->materials_ = defaultMaterials();
+  this->warnedUnknownMaterials_.clear();
+  for (auto &[materialName, props] : this->materials_)
+  {
+    const std::string prefix = "material_" + materialName;
+    if (_sdf && _sdf->HasElement(prefix + "_penetration_m"))
+      props.penetrationM = _sdf->Get<double>(prefix + "_penetration_m");
+    if (materialName != kConductorMaterial && _sdf && _sdf->HasElement(prefix + "_permittivity"))
+      props.permittivity = _sdf->Get<double>(prefix + "_permittivity");
+  }
+
+  // The previous material model's scalar multipliers no longer exist; say
+  // so rather than silently ignoring an old preset.
+  for (const char *oldName : {"default", "metal", "wood", "cardboard", "plastic", "foam"})
+  {
+    const std::string paramName = std::string("material_attenuation_") + oldName;
     if (_sdf && _sdf->HasElement(paramName))
-      this->materialAttenuation_[materialName] = _sdf->Get<double>(paramName);
+    {
+      gzwarn << "[UWBGazeboSystem] " << paramName << " is no longer used (replaced by "
+                "material_<name>_penetration_m / _permittivity; see README.md, "
+                "\"Measurement model\"). Ignoring it.\n";
+    }
   }
 
   this->ValidateAndNormalizeParameters();
@@ -511,6 +704,29 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   this->pairBiasCm_.clear();
   this->publishers_.clear();
   this->groundTruthPublishers_.clear();
+
+  std::ostringstream materialSummary;
+  if (this->enableMaterialAttenuation_)
+  {
+    materialSummary << ", material_los_max_severity=" << this->materialLosMaxSeverity_
+                    << ", nlos_dropout_material_extra_weight=" << this->nlosDropoutMaterialExtraWeight_
+                    << ", nlos_stddev_material_extra_weight=" << this->nlosStddevMaterialExtraWeight_
+                    << ", material_metal_detour_bias_cm=" << this->metalDetourBiasCm_
+                    << ", materials={";
+    std::vector<std::string> names;
+    for (const auto &[name, props] : this->materials_)
+      names.push_back(name);
+    std::sort(names.begin(), names.end());
+    for (size_t i = 0; i < names.size(); ++i)
+    {
+      const auto &props = this->materials_.at(names[i]);
+      materialSummary << (i ? ", " : "") << names[i] << ":{lambda_m=" << props.penetrationM;
+      if (names[i] != kConductorMaterial)
+        materialSummary << ", eps_r=" << props.permittivity;
+      materialSummary << "}";
+    }
+    materialSummary << "}";
+  }
 
   gzmsg << "[UWBGazeboSystem] Sensor model: gaussian_mean_cm=" << this->noiseMeanCm_
         << ", dropout_probability_range=[" << this->minDropoutProbability_ << ", "
@@ -542,7 +758,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         << ", ground_truth_topic=" << this->groundTruthTopic_
         << ", uwb_mode=" << (this->uwbMode_ == UwbMode::Tdoa ? "tdoa" : "twr")
         << ", enable_material_attenuation=" << std::boolalpha << this->enableMaterialAttenuation_
-        << "\n";
+        << materialSummary.str() << "\n";
 }
 
 gz::math::Pose3d computeWorldPose(const gz::sim::Entity &entity,
@@ -639,38 +855,40 @@ double mergeAndSumIntervals(std::vector<std::pair<double, double>> _intervals)
   return total;
 }
 
-// _materialMultipliers: optional (nullptr when material attenuation is
-// disabled) per-link attenuation multiplier, resolved once per PreUpdate
-// call from each obstacle's name (see ExtractMaterialName/
-// MaterialAttenuationFor) rather than looked up here. Intervals are grouped
-// by multiplier and merged *within* each group before summing across
-// groups, so overlapping AABBs from the same material (e.g. a wall split
-// into several collision links) still aren't double-counted, while
-// different materials in series each still contribute their own share.
-// With _materialMultipliers null, every link implicitly shares one group
-// with multiplier 1.0, which reduces to exactly the prior (pre-material)
-// behaviour.
-double computeAabbBlockedThicknessM(const gz::math::Vector3d &_start,
-                                    const gz::math::Vector3d &_end,
-                                    const std::vector<gz::sim::Entity> &_allLinks,
-                                    const gz::sim::Entity &_tagLinkEntity,
-                                    const gz::sim::Entity &_anchorLinkEntity,
-                                    const double _endpointMarginM,
-                                    gz::sim::EntityComponentManager &_ecm,
-                                    const std::unordered_map<gz::sim::Entity, double> *_materialMultipliers = nullptr)
+// Length of the tag-anchor segment that lies inside obstacle AABBs, split
+// into untagged obstacles (fed to the generic thickness curve) and each
+// tagged material (fed to the Beer-Lambert material model). _materials is
+// optional (nullptr when the material model is disabled) and maps an
+// obstacle link to its material name, resolved once per PreUpdate call;
+// links missing from it count as untagged. Intervals are merged *within*
+// each group before summing, so overlapping AABBs of the same group (e.g. a
+// wall split into several collision links) aren't double-counted, while
+// different materials in series each contribute their own length. With
+// _materials null, every link is untagged, which reduces to exactly the
+// original single-thickness behaviour.
+BlockedPath computeAabbBlockedPath(const gz::math::Vector3d &_start,
+                                   const gz::math::Vector3d &_end,
+                                   const std::vector<gz::sim::Entity> &_allLinks,
+                                   const gz::sim::Entity &_tagLinkEntity,
+                                   const gz::sim::Entity &_anchorLinkEntity,
+                                   const double _endpointMarginM,
+                                   gz::sim::EntityComponentManager &_ecm,
+                                   const std::unordered_map<gz::sim::Entity, std::string> *_materials = nullptr)
 {
+  BlockedPath path;
   const double segmentLength = _start.Distance(_end);
   if (segmentLength <= (2.0 * _endpointMarginM))
-    return 0.0;
+    return path;
 
   const gz::math::Vector3d segment = _end - _start;
   const double tMargin = _endpointMarginM / segmentLength;
   const double tMinAllowed = tMargin;
   const double tMaxAllowed = 1.0 - tMargin;
   if (tMaxAllowed <= tMinAllowed)
-    return 0.0;
+    return path;
 
-  std::unordered_map<double, std::vector<std::pair<double, double>>> intervalsByMultiplier;
+  // Keyed by material name; "" holds the untagged obstacles.
+  std::unordered_map<std::string, std::vector<std::pair<double, double>>> intervalsByMaterial;
 
   for (const auto &linkEntity : _allLinks)
   {
@@ -693,30 +911,30 @@ double computeAabbBlockedThicknessM(const gz::math::Vector3d &_start,
     if (clippedExit <= clippedEnter)
       continue;
 
-    double multiplier = 1.0;
-    if (_materialMultipliers)
+    std::string materialName;
+    if (_materials)
     {
-      const auto it = _materialMultipliers->find(linkEntity);
-      if (it != _materialMultipliers->end())
-        multiplier = it->second;
+      const auto it = _materials->find(linkEntity);
+      if (it != _materials->end())
+        materialName = it->second;
     }
 
-    intervalsByMultiplier[multiplier].emplace_back(clippedEnter, clippedExit);
+    intervalsByMaterial[materialName].emplace_back(clippedEnter, clippedExit);
   }
 
-  if (intervalsByMultiplier.empty())
-    return 0.0;
-
-  double blockedFraction = 0.0;
-  for (auto &[multiplier, intervals] : intervalsByMultiplier)
+  for (auto &[materialName, intervals] : intervalsByMaterial)
   {
-    blockedFraction += multiplier * mergeAndSumIntervals(std::move(intervals));
+    const double lengthM = mergeAndSumIntervals(std::move(intervals)) * segmentLength;
+    if (lengthM <= 0.0)
+      continue;
+
+    if (materialName.empty())
+      path.untaggedM = lengthM;
+    else
+      path.materialLengthM[materialName] = lengthM;
   }
 
-  if (blockedFraction <= 0.0)
-    return 0.0;
-
-  return blockedFraction * segmentLength;
+  return path;
 }
 
 void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
@@ -849,13 +1067,14 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		gz::sim::Link(linkEntity).EnableBoundingBoxChecks(ecm, true);
 	}
 
-	// Resolve each obstacle's material multiplier once per update (not once
-	// per anchor-tag/anchor-pair below) -- obstacles don't move relative to
-	// the world between pairs, so their material never changes mid-update.
-	// Only obstacleLinks (walls/world geometry) are material-aware; robot
-	// bodyShadowLinks keep their existing unscaled behaviour, since a
-	// vehicle's own body isn't an NLOS "material" a world author would tag.
-	std::unordered_map<gz::sim::Entity, double> obstacleMaterialMultipliers;
+	// Resolve each obstacle's material once per update (not once per
+	// anchor-tag/anchor-pair below) -- obstacles don't change material
+	// mid-update. Only obstacleLinks (walls/world geometry) are
+	// material-aware; robot bodyShadowLinks always use the generic thickness
+	// curve, since a vehicle's own body isn't an NLOS "material" a world
+	// author would tag. Obstacles left out of the map (untagged, or tagged
+	// with a material not in materials_) use the generic thickness curve too.
+	std::unordered_map<gz::sim::Entity, std::string> obstacleMaterials;
 	if (this->enableMaterialAttenuation_)
 	{
 		for (const auto &linkEntity : obstacleLinks)
@@ -873,259 +1092,226 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 					materialName = extractMaterialName(modelNameComp->Data());
 			}
 
-			obstacleMaterialMultipliers[linkEntity] = this->MaterialAttenuationFor(materialName);
-		}
-	}
-	const std::unordered_map<gz::sim::Entity, double> *obstacleMaterialMultipliersPtr =
-		this->enableMaterialAttenuation_ ? &obstacleMaterialMultipliers : nullptr;
+			if (materialName.empty())
+				continue;
 
-	if (this->uwbMode_ == UwbMode::Twr)
-	{
-	// Compute distance between each anchor-tag pair
-	for (const auto &[tagName, tagEntity] : tags)
-	{
-		auto tagPose = computeWorldPose(tagEntity, ecm);
-
-    // Compute per-pair dropout from LOS distance or NLOS blocked thickness.
-		for (const auto &[anchorName, anchorEntity] : anchors)
-		{
-			auto anchorPose = computeWorldPose(anchorEntity, ecm);
-			std::string tagId = tagName.substr(tagName.find_last_of('_') + 1);
-			std::string anchorId = anchorName.substr(anchorName.find_last_of('_') + 1);
-			std::string pairId = "a" + anchorId + "t" + tagId;
-
-			const double wallBlockedThicknessM =
-				computeAabbBlockedThicknessM(tagPose.Pos(),
-											 anchorPose.Pos(),
-											 obstacleLinks,
-											 tagEntity,
-											 anchorEntity,
-											 this->nlosEndpointMarginM_,
-											 ecm,
-											 obstacleMaterialMultipliersPtr);
-			const double bodyShadowBlockedThicknessM =
-				computeAabbBlockedThicknessM(tagPose.Pos(),
-											 anchorPose.Pos(),
-											 bodyShadowLinks,
-											 tagEntity,
-											 anchorEntity,
-											 this->nlosEndpointMarginM_,
-											 ecm);
-			const double effectiveBlockedThicknessM =
-				wallBlockedThicknessM +
-				this->ComputeBodyShadowEquivalentThicknessM(bodyShadowBlockedThicknessM);
-
-			const double distanceM = tagPose.Pos().Distance(anchorPose.Pos());
-			const double groundTruthDistCm = distanceM * 100.0;
-			const double dropoutProbability =
-				this->ComputeDropoutProbability(distanceM, effectiveBlockedThicknessM);
-			const double noiseStddevCm =
-				this->ComputeNoiseStddevCm(distanceM, effectiveBlockedThicknessM);
-
-			if (wallBlockedThicknessM > 0.0 || bodyShadowBlockedThicknessM > 0.0)
+			if (this->materials_.find(materialName) == this->materials_.end())
 			{
-				gzmsg << "[UWBGazeboSystem] wall_blocked_thickness_m=" << wallBlockedThicknessM
-				      << ", body_shadow_blocked_thickness_m=" << bodyShadowBlockedThicknessM
-				      << ", effective_blocked_thickness_m=" << effectiveBlockedThicknessM
-				      << " pair=" << pairId << "\n";
-			}
-
-			const std::string groundTruthTopic = makePairTopic(this->groundTruthTopic_, pairId);
-			if (this->groundTruthPublishers_.find(groundTruthTopic) == this->groundTruthPublishers_.end())
-			{
-				this->groundTruthPublishers_[groundTruthTopic] =
-					this->node_.Advertise<gz::msgs::Double>(groundTruthTopic);
-			}
-
-			gz::msgs::Double groundTruthMsg;
-			groundTruthMsg.set_data(groundTruthDistCm);
-			this->groundTruthPublishers_[groundTruthTopic].Publish(groundTruthMsg);
-
-			if (std::bernoulli_distribution(dropoutProbability)(this->rng_))
-			{
+				if (this->warnedUnknownMaterials_.insert(materialName).second)
+				{
+					gzwarn << "[UWBGazeboSystem] Unknown obstacle material '" << materialName
+					       << "' (known: " << knownMaterialList(this->materials_)
+					       << "). Treating it as an untagged obstacle.\n";
+				}
 				continue;
 			}
 
-			const bool isNlos = (effectiveBlockedThicknessM > this->losMaxThicknessM_);
-			double noiseCm =
-				std::normal_distribution<double>(this->noiseMeanCm_, noiseStddevCm)(this->rng_);
-			if (isNlos && noiseCm < 0.0)
-			{
-				noiseCm = -noiseCm;
-			}
-
-			double dist = groundTruthDistCm;
-			dist += noiseCm;
-
-			// Build stable key per anchor–tag pair
-			const std::string key = "a" + anchorName + "t" + tagName;
-
-			if (this->applyPairBias_)
-			{
-				// Draw and cache a persistent bias for this pair (in cm)
-				auto it = this->pairBiasCm_.find(key);
-				if (it == this->pairBiasCm_.end())
-				{
-					it = this->pairBiasCm_.emplace(key, this->biasCmDist_(this->rng_)).first;
-				}
-				dist += it->second;
-			}
-
-			// Keep distance physically valid
-			if (dist < 0.0) dist = 0.0;
-
-			const std::string topic = makePairTopic(this->topic_, pairId);
-
-			// Create publisher if not already existing
-			if (this->publishers_.find(topic) == this->publishers_.end())
-			{
-				this->publishers_[topic] = this->node_.Advertise<gz::msgs::Double>(topic);
-			}
-
-			gz::msgs::Double msg;
-			msg.set_data(dist);
-			this->publishers_[topic].Publish(msg);
+			obstacleMaterials[linkEntity] = materialName;
 		}
 	}
-	}  // uwbMode_ == UwbMode::Twr
+	const std::unordered_map<gz::sim::Entity, std::string> *obstacleMaterialsPtr =
+		this->enableMaterialAttenuation_ ? &obstacleMaterials : nullptr;
+
+	// Geometry + channel state of one tag-anchor link: what the ray crosses
+	// and the resulting LOS/NLOS regime, noise stddev and dropout
+	// probability. Shared by TWR (one link per measurement) and TDOA (two
+	// links per measurement). See README.md, "Measurement model".
+	auto evaluateLink = [&](const gz::sim::Entity &_tagEntity,
+	                        const gz::math::Vector3d &_tagPos,
+	                        const gz::sim::Entity &_anchorEntity,
+	                        const gz::math::Vector3d &_anchorPos)
+	{
+		LinkState link;
+		link.distanceM = _tagPos.Distance(_anchorPos);
+
+		const BlockedPath wallPath =
+			computeAabbBlockedPath(_tagPos, _anchorPos, obstacleLinks, _tagEntity, _anchorEntity,
+			                       this->nlosEndpointMarginM_, ecm, obstacleMaterialsPtr);
+		const BlockedPath bodyPath =
+			computeAabbBlockedPath(_tagPos, _anchorPos, bodyShadowLinks, _tagEntity, _anchorEntity,
+			                       this->nlosEndpointMarginM_, ecm);
+
+		link.wallThicknessM = wallPath.untaggedM;
+		link.bodyShadowThicknessM = bodyPath.untaggedM;
+		for (const auto &[materialName, lengthM] : wallPath.materialLengthM)
+			link.materialLengthM += lengthM;
+
+		link.untaggedThicknessM =
+			wallPath.untaggedM + this->ComputeBodyShadowEquivalentThicknessM(bodyPath.untaggedM);
+		this->ComputeMaterialEffects(wallPath.materialLengthM, link.materialSeverity, link.materialBiasCm);
+		link.isNlos = this->IsNlos(link.untaggedThicknessM, link.materialSeverity);
+		link.dropoutProbability = this->ComputeDropoutProbability(
+			link.distanceM, link.untaggedThicknessM, link.materialSeverity);
+		link.noiseStddevCm = this->ComputeNoiseStddevCm(
+			link.distanceM, link.untaggedThicknessM, link.materialSeverity);
+		return link;
+	};
+
+	// Random + deterministic range error of one link, in cm (excluding the
+	// persistent per-pair/per-anchor bias, which differs between modes):
+	// Gaussian noise, folded positive in NLOS (the first path arrives late,
+	// never early), plus the materials' excess-delay bias.
+	auto drawLinkErrorCm = [&](const LinkState &_link)
+	{
+		double noiseCm =
+			std::normal_distribution<double>(this->noiseMeanCm_, _link.noiseStddevCm)(this->rng_);
+		if (_link.isNlos && noiseCm < 0.0)
+			noiseCm = -noiseCm;
+		return noiseCm + _link.materialBiasCm;
+	};
+
+	// Persistent bias drawn once per key from U(bias_min_cm, bias_max_cm).
+	auto persistentBiasCm = [&](const std::string &_key)
+	{
+		auto it = this->pairBiasCm_.find(_key);
+		if (it == this->pairBiasCm_.end())
+			it = this->pairBiasCm_.emplace(_key, this->biasCmDist_(this->rng_)).first;
+		return it->second;
+	};
+
+	auto publishTo = [&](std::unordered_map<std::string, gz::transport::Node::Publisher> &_publishers,
+	                     const std::string &_topic,
+	                     const double _value)
+	{
+		if (_publishers.find(_topic) == _publishers.end())
+			_publishers[_topic] = this->node_.Advertise<gz::msgs::Double>(_topic);
+
+		gz::msgs::Double msg;
+		msg.set_data(_value);
+		_publishers[_topic].Publish(msg);
+	};
+
+	if (this->uwbMode_ == UwbMode::Twr)
+	{
+		// Compute distance between each anchor-tag pair
+		for (const auto &[tagName, tagEntity] : tags)
+		{
+			const auto tagPose = computeWorldPose(tagEntity, ecm);
+			const std::string tagId = tagName.substr(tagName.find_last_of('_') + 1);
+
+			for (const auto &[anchorName, anchorEntity] : anchors)
+			{
+				const auto anchorPose = computeWorldPose(anchorEntity, ecm);
+				const std::string anchorId = anchorName.substr(anchorName.find_last_of('_') + 1);
+				const std::string pairId = "a" + anchorId + "t" + tagId;
+
+				const LinkState link = evaluateLink(tagEntity, tagPose.Pos(), anchorEntity, anchorPose.Pos());
+
+				if (link.wallThicknessM > 0.0 || link.bodyShadowThicknessM > 0.0 || link.materialLengthM > 0.0)
+				{
+					gzmsg << "[UWBGazeboSystem] wall_blocked_thickness_m=" << link.wallThicknessM
+					      << ", body_shadow_blocked_thickness_m=" << link.bodyShadowThicknessM
+					      << ", effective_blocked_thickness_m=" << link.untaggedThicknessM
+					      << ", material_blocked_length_m=" << link.materialLengthM
+					      << ", material_severity=" << link.materialSeverity
+					      << ", material_bias_cm=" << link.materialBiasCm
+					      << " pair=" << pairId << "\n";
+				}
+
+				const double groundTruthDistCm = link.distanceM * 100.0;
+				publishTo(this->groundTruthPublishers_,
+				          makePairTopic(this->groundTruthTopic_, pairId),
+				          groundTruthDistCm);
+
+				if (std::bernoulli_distribution(link.dropoutProbability)(this->rng_))
+					continue;
+
+				// r = d + n + beta + b_pair
+				double dist = groundTruthDistCm + drawLinkErrorCm(link);
+				if (this->applyPairBias_)
+					dist += persistentBiasCm("a" + anchorName + "t" + tagName);
+
+				// Keep distance physically valid
+				if (dist < 0.0) dist = 0.0;
+
+				publishTo(this->publishers_, makePairTopic(this->topic_, pairId), dist);
+			}
+		}
+	}
 	else  // UwbMode::Tdoa
 	{
 		if (anchors.size() < 2)
 		{
 			gzwarn << "[UWBGazeboSystem] uwb_mode=tdoa needs at least 2 anchors; found "
 			       << anchors.size() << ". Skipping this update.\n";
+			return;
 		}
-		else
+
+		// Reference ("master") anchor: the one with the smallest numeric id,
+		// matching a centralized/TDOA2-style deployment (all other anchors'
+		// arrival times get compared against this one). Not configurable yet
+		// -- a fixed, deterministic choice is enough to produce realistic
+		// TDOA statistics without simulating the clock-sync protocol. Ids are
+		// all-digit (enforced by extractSensorId above), so stoul is safe.
+		auto anchorNumericId = [](const std::string &_anchorName)
 		{
-			// Reference ("master") anchor: the one with the smallest numeric id,
-			// matching a believable centralized/TDOA2-style deployment (all
-			// other anchors' arrival times get compared against this one). Not
-			// configurable yet -- a fixed, deterministic choice is enough to
-			// produce realistic TDOA statistics without simulating the full
-			// clock-sync protocol (see the uwb_mode comment in the header).
-			auto refIt = std::min_element(anchors.begin(), anchors.end(),
-				[](const auto &lhs, const auto &rhs)
-				{
-					const std::string lhsId = lhs.first.substr(lhs.first.find_last_of('_') + 1);
-					const std::string rhsId = rhs.first.substr(rhs.first.find_last_of('_') + 1);
-					return std::stoi(lhsId) < std::stoi(rhsId);
-				});
-			const auto &[refAnchorName, refAnchorEntity] = *refIt;
-			const std::string refAnchorId = refAnchorName.substr(refAnchorName.find_last_of('_') + 1);
-
-			for (const auto &[tagName, tagEntity] : tags)
+			return std::stoul(_anchorName.substr(_anchorName.find_last_of('_') + 1));
+		};
+		const auto refIt = std::min_element(anchors.begin(), anchors.end(),
+			[&](const auto &_lhs, const auto &_rhs)
 			{
-				auto tagPose = computeWorldPose(tagEntity, ecm);
-				const std::string tagId = tagName.substr(tagName.find_last_of('_') + 1);
-				auto refAnchorPose = computeWorldPose(refAnchorEntity, ecm);
-				const double refDistanceM = tagPose.Pos().Distance(refAnchorPose.Pos());
+				return anchorNumericId(_lhs.first) < anchorNumericId(_rhs.first);
+			});
+		const auto &[refAnchorName, refAnchorEntity] = *refIt;
+		const std::string refAnchorId = refAnchorName.substr(refAnchorName.find_last_of('_') + 1);
 
-				const double refWallBlockedThicknessM =
-					computeAabbBlockedThicknessM(tagPose.Pos(), refAnchorPose.Pos(), obstacleLinks,
-					                             tagEntity, refAnchorEntity, this->nlosEndpointMarginM_,
-					                             ecm, obstacleMaterialMultipliersPtr);
-				const double refBodyShadowBlockedThicknessM =
-					computeAabbBlockedThicknessM(tagPose.Pos(), refAnchorPose.Pos(), bodyShadowLinks,
-					                             tagEntity, refAnchorEntity, this->nlosEndpointMarginM_, ecm);
-				const double refEffectiveBlockedThicknessM =
-					refWallBlockedThicknessM +
-					this->ComputeBodyShadowEquivalentThicknessM(refBodyShadowBlockedThicknessM);
-				const double refDropoutProbability =
-					this->ComputeDropoutProbability(refDistanceM, refEffectiveBlockedThicknessM);
-				const double refNoiseStddevCm =
-					this->ComputeNoiseStddevCm(refDistanceM, refEffectiveBlockedThicknessM);
+		for (const auto &[tagName, tagEntity] : tags)
+		{
+			const auto tagPose = computeWorldPose(tagEntity, ecm);
+			const std::string tagId = tagName.substr(tagName.find_last_of('_') + 1);
+			const auto refAnchorPose = computeWorldPose(refAnchorEntity, ecm);
 
-				for (const auto &[anchorName, anchorEntity] : anchors)
-				{
-					if (anchorEntity == refAnchorEntity)
-						continue;
+			const LinkState refLink =
+				evaluateLink(tagEntity, tagPose.Pos(), refAnchorEntity, refAnchorPose.Pos());
 
-					auto anchorPose = computeWorldPose(anchorEntity, ecm);
-					const std::string anchorId = anchorName.substr(anchorName.find_last_of('_') + 1);
-					// 3-component pairId (vs. TWR's 2-component "a<id>t<id>")
-					// clearly marks this as a differential measurement between
-					// two anchors, not a single-anchor range.
-					const std::string pairId = "a" + refAnchorId + "a" + anchorId + "t" + tagId;
+			// One reference-anchor arrival per tag per update, shared by every
+			// TDOA formed against it: if it's lost, all of them are lost, and
+			// its error enters all of them with the same value (and sign).
+			const bool refDropped =
+				std::bernoulli_distribution(refLink.dropoutProbability)(this->rng_);
+			double refErrorCm = 0.0;
+			if (!refDropped)
+			{
+				refErrorCm = drawLinkErrorCm(refLink);
+				if (this->applyPairBias_)
+					refErrorCm += persistentBiasCm("tdoa_a" + refAnchorId);
+			}
 
-					const double distanceM = tagPose.Pos().Distance(anchorPose.Pos());
-					// Ground truth per the UTIL dataset paper (Zhao et al. 2023,
-					// Eq. 1): d_ij = ||p-a_j|| - ||p-a_i||, with anchor i the
-					// reference.
-					const double groundTruthTdoaCm = (distanceM - refDistanceM) * 100.0;
+			for (const auto &[anchorName, anchorEntity] : anchors)
+			{
+				if (anchorEntity == refAnchorEntity)
+					continue;
 
-					const double wallBlockedThicknessM =
-						computeAabbBlockedThicknessM(tagPose.Pos(), anchorPose.Pos(), obstacleLinks,
-						                             tagEntity, anchorEntity, this->nlosEndpointMarginM_,
-						                             ecm, obstacleMaterialMultipliersPtr);
-					const double bodyShadowBlockedThicknessM =
-						computeAabbBlockedThicknessM(tagPose.Pos(), anchorPose.Pos(), bodyShadowLinks,
-						                             tagEntity, anchorEntity, this->nlosEndpointMarginM_, ecm);
-					const double effectiveBlockedThicknessM =
-						wallBlockedThicknessM +
-						this->ComputeBodyShadowEquivalentThicknessM(bodyShadowBlockedThicknessM);
-					const double dropoutProbability =
-						this->ComputeDropoutProbability(distanceM, effectiveBlockedThicknessM);
-					const double noiseStddevCm =
-						this->ComputeNoiseStddevCm(distanceM, effectiveBlockedThicknessM);
+				const auto anchorPose = computeWorldPose(anchorEntity, ecm);
+				const std::string anchorId = anchorName.substr(anchorName.find_last_of('_') + 1);
+				// 3-component pairId (vs. TWR's 2-component "a<id>t<id>")
+				// clearly marks this as a differential measurement between
+				// two anchors, not a single-anchor range.
+				const std::string pairId = "a" + refAnchorId + "a" + anchorId + "t" + tagId;
 
-					// A TDOA reading needs *both* legs (tag-to-reference,
-					// tag-to-this-anchor) to succeed; combine as the
-					// probability that at least one leg's independent dropout
-					// fires. Noise combines as the sum of independent
-					// variances (TDOA = difference of two range-like
-					// measurements), matching the UTIL-derived calibration
-					// note in presets/util_identification.yaml -- unlike that
-					// preset's approximation, this is exact here since both
-					// legs' per-link curves are the real underlying model.
-					const double combinedDropoutProbability =
-						1.0 - ((1.0 - refDropoutProbability) * (1.0 - dropoutProbability));
-					const double combinedNoiseStddevCm =
-						std::sqrt((refNoiseStddevCm * refNoiseStddevCm) +
-						          (noiseStddevCm * noiseStddevCm));
+				const LinkState link = evaluateLink(tagEntity, tagPose.Pos(), anchorEntity, anchorPose.Pos());
 
-					const std::string groundTruthTopic = makePairTopic(this->tdoaGroundTruthTopic_, pairId);
-					if (this->groundTruthPublishers_.find(groundTruthTopic) == this->groundTruthPublishers_.end())
-					{
-						this->groundTruthPublishers_[groundTruthTopic] =
-							this->node_.Advertise<gz::msgs::Double>(groundTruthTopic);
-					}
-					gz::msgs::Double groundTruthMsg;
-					groundTruthMsg.set_data(groundTruthTdoaCm);
-					this->groundTruthPublishers_[groundTruthTopic].Publish(groundTruthMsg);
+				// Ground truth per the UTIL dataset paper (Zhao et al. 2023,
+				// Eq. 1): d_ij = ||p-a_j|| - ||p-a_i||, with anchor i the
+				// reference.
+				const double groundTruthTdoaCm = (link.distanceM - refLink.distanceM) * 100.0;
+				publishTo(this->groundTruthPublishers_,
+				          makePairTopic(this->tdoaGroundTruthTopic_, pairId),
+				          groundTruthTdoaCm);
 
-					if (std::bernoulli_distribution(combinedDropoutProbability)(this->rng_))
-					{
-						continue;
-					}
+				if (refDropped || std::bernoulli_distribution(link.dropoutProbability)(this->rng_))
+					continue;
 
-					// Unlike TWR's range (which can't be negative, so NLOS
-					// noise is folded positive), a TDOA value is a signed
-					// difference -- NLOS on either leg can push it either
-					// way, so the noise stays a plain, unfolded Gaussian.
-					const double noiseCm =
-						std::normal_distribution<double>(this->noiseMeanCm_, combinedNoiseStddevCm)(this->rng_);
-					double tdoaCm = groundTruthTdoaCm + noiseCm;
+				// d_ij = d_ij_true + e_j - e_i, each leg's error e = n + beta + b_anchor.
+				// The per-anchor bias stands in for antenna delay; the tag's own
+				// delay is common to both legs and cancels in the difference.
+				double legErrorCm = drawLinkErrorCm(link);
+				if (this->applyPairBias_)
+					legErrorCm += persistentBiasCm("tdoa_a" + anchorId);
 
-					if (this->applyPairBias_)
-					{
-						const std::string key = "a" + refAnchorId + "a" + anchorId + "t" + tagId;
-						auto it = this->pairBiasCm_.find(key);
-						if (it == this->pairBiasCm_.end())
-						{
-							it = this->pairBiasCm_.emplace(key, this->biasCmDist_(this->rng_)).first;
-						}
-						tdoaCm += it->second;
-					}
-
-					const std::string topic = makePairTopic(this->tdoaTopic_, pairId);
-					if (this->publishers_.find(topic) == this->publishers_.end())
-					{
-						this->publishers_[topic] = this->node_.Advertise<gz::msgs::Double>(topic);
-					}
-					gz::msgs::Double msg;
-					msg.set_data(tdoaCm);
-					this->publishers_[topic].Publish(msg);
-				}
+				publishTo(this->publishers_,
+				          makePairTopic(this->tdoaTopic_, pairId),
+				          groundTruthTdoaCm + legErrorCm - refErrorCm);
 			}
 		}
 	}

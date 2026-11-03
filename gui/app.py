@@ -131,6 +131,11 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
     # is given and nothing else has been picked yet -- mirrors
     # setup_simulator.sh's own -y fallback (see select_params_preset there).
     DEFAULT_PRESET_NAME = "eliko_identification"
+    # Hand-written, calibration-annotated presets shipped with the repo.
+    # Read-only from the GUI: saving re-renders a preset from PARAM_GROUPS,
+    # which would drop their explanatory comments -- tune one, then save it
+    # under a new name instead.
+    BUILTIN_PRESETS = frozenset({"eliko_identification", "util_identification"})
 
     # (group label, [(key, default)]) -- defines both the canonical write
     # order/section comments for a rendered preset file and the ordered
@@ -183,14 +188,28 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("tdoa_topic", "/uwb_gz_simulator/tdoa"),
             ("tdoa_ground_truth_topic", "/uwb_gz_simulator/tdoa_ground_truth"),
         ]),
-        ("Material-aware NLOS attenuation.", [
+        ("Material-aware NLOS model (obstacles named *__material_<name>).", [
             ("enable_material_attenuation", False),
-            ("material_attenuation_default", 1.0),
-            ("material_attenuation_metal", 1.0),
-            ("material_attenuation_wood", 0.08),
-            ("material_attenuation_cardboard", 0.03),
-            ("material_attenuation_plastic", 0.15),
-            ("material_attenuation_foam", 0.02),
+            ("material_los_max_severity", 0.05),
+            ("nlos_dropout_material_extra_weight", 1.0),
+            ("nlos_stddev_material_extra_weight", 1.0),
+            ("material_metal_detour_bias_cm", 35.0),
+        ]),
+        # Keep in sync with defaultMaterials() in UWBGazeboSystem.cpp.
+        ("Material penetration length lambda (m) and relative permittivity eps_r.", [
+            ("material_metal_penetration_m", 0.0005),
+            ("material_concrete_penetration_m", 0.5),
+            ("material_concrete_permittivity", 5.0),
+            ("material_glass_penetration_m", 0.5),
+            ("material_glass_permittivity", 6.0),
+            ("material_wood_penetration_m", 2.0),
+            ("material_wood_permittivity", 2.0),
+            ("material_plastic_penetration_m", 1.0),
+            ("material_plastic_permittivity", 2.5),
+            ("material_cardboard_penetration_m", 10.0),
+            ("material_cardboard_permittivity", 1.2),
+            ("material_foam_penetration_m", 20.0),
+            ("material_foam_permittivity", 1.05),
         ]),
     ]
     PARAM_DEFAULTS = {k: v for _label, kv in PARAM_GROUPS for k, v in kv}
@@ -324,7 +343,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
 
     @app.get("/api/params/presets")
     def list_param_presets():
-        return jsonify(list_preset_names())
+        return jsonify([{"name": n, "builtin": n in BUILTIN_PRESETS} for n in list_preset_names()])
 
     @app.get("/api/params/presets/<name>")
     def get_param_preset(name: str):
@@ -345,10 +364,19 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             fname = safe_yaml_name(name)
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
+        path = presets_dir / fname
+        if path.stem in BUILTIN_PRESETS:
+            return jsonify({"error": f"{path.stem} is a built-in preset and can't be overwritten; "
+                                     f"save your changes under a new name (e.g. {path.stem}_custom)."}), 403
+        # ?overwrite=1 is the frontend's confirmation that replacing an
+        # existing preset is intended; without it, an existing file is a 409
+        # the frontend turns into an "Overwrite?" prompt.
+        if path.is_file() and request.args.get("overwrite") != "1":
+            return jsonify({"error": f"{path.stem} already exists.", "exists": True}), 409
         values = request.get_json(force=True, silent=True) or {}
         merged = dict(PARAM_DEFAULTS)
         merged.update(values)
-        (presets_dir / fname).write_text(render_params_yaml(merged))
+        path.write_text(render_params_yaml(merged))
         return jsonify({"saved": fname})
 
     # -- hand control back to setup_simulator.sh ---------------------------

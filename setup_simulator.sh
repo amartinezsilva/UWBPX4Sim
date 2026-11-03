@@ -154,8 +154,8 @@ select_world() {
 }
 
 run_gui() {
-  # Populates LAYOUT_FILE (and, if chosen there, WORLD_ARG) via the browser
-  # GUI instead of the terminal pickers below. Returns 1 on anything short
+  # Populates LAYOUT_FILE and PARAMS_PRESET (and, if chosen there,
+  # WORLD_ARG) via the browser GUI instead of the terminal pickers below. Returns 1 on anything short
   # of a clean finish (missing deps, port taken, GUI closed without
   # clicking "Continue Setup") so the caller can fall back to select_layout.
   local gui_dir="$SCRIPT_DIR/gui" selection_file gui_pid
@@ -304,6 +304,26 @@ select_params_preset() {
   done
 }
 
+resolve_params_preset_file() {
+  # Prints the preset file for PARAMS_PRESET, which may be a bare name
+  # (looked up as presets/<name>.yaml or .yml) or a path to any YAML file
+  # (so --params can also point at a preset kept outside the repo).
+  local candidate
+  if [[ "$PARAMS_PRESET" == */* || "$PARAMS_PRESET" == *.yaml || "$PARAMS_PRESET" == *.yml ]]; then
+    if [[ -f "$PARAMS_PRESET" ]]; then
+      printf '%s\n' "$(cd "$(dirname "$PARAMS_PRESET")" && pwd)/$(basename "$PARAMS_PRESET")"
+      return 0
+    fi
+  fi
+  for candidate in "$PARAMS_PRESETS_DIR/$PARAMS_PRESET.yaml" "$PARAMS_PRESETS_DIR/$PARAMS_PRESET.yml"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 print_usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
@@ -316,16 +336,23 @@ Options:
                        config/*.yaml and prompts you to pick one if the GUI isn't
                        available; auto-selects demo_nlos.yaml, or the
                        first found, under -y)
+  --params NAME|PATH  Plugin-parameter preset to sync into PX4's server.config:
+                       a name under uwb_gazebo_plugin/presets/ (e.g.
+                       util_identification) or a path to a preset YAML (also
+                       settable via UWB_PARAMS_PRESET). If omitted, uses the
+                       one picked in the GUI, or lists the presets and prompts
+                       you to pick one (auto-selects eliko_identification, or
+                       the first found, under -y)
   --no-gui            Skip the browser GUI and go straight to the terminal
-                       layout/world pickers
+                       layout/preset/world pickers
   --px4-dir DIR       PX4-Autopilot checkout (default: \$PX4_DIR or ~/PX4-Autopilot)
   --ros-ws DIR        ROS 2 workspace root (default: \$ROS_WS or auto-detected)
   --world NAME|PATH   World to use, by name -- either a custom one (worlds/*.sdf,
                        always copied into PX4 regardless of this flag) or one PX4
                        already ships (e.g. baylands); a full path to an .sdf file
                        also works. Falls back to PX4's default world if the name
-                       isn't found there. Overrides the layout's own `world:`
-                       field. If omitted (and the layout doesn't set `world:`
+                       isn't found there. Overrides the layout's own 'world:'
+                       field. If omitted (and the layout doesn't set 'world:'
                        either), lists worlds/*.sdf and prompts you to pick one, or
                        none (under -y, keeps PX4's default world unless a world is
                        named by one of those two)
@@ -340,13 +367,15 @@ Options:
   -n, --dry-run       Print what would happen without changing anything
   -h, --help          Show this help message
 
-Environment overrides: UWB_LAYOUT_FILE, PX4_DIR, ROS_WS, UWB_GUI_PORT (default 5050)
+Environment overrides: UWB_LAYOUT_FILE, UWB_PARAMS_PRESET, PX4_DIR, ROS_WS,
+UWB_GUI_PORT (default 5050)
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --layout) LAYOUT_FILE="$2"; shift 2 ;;
+    --params) PARAMS_PRESET="$2"; shift 2 ;;
     --px4-dir) PX4_DIR="$2"; shift 2 ;;
     --ros-ws) ROS_WS="$2"; shift 2 ;;
     --world) WORLD_ARG="$2"; shift 2 ;;
@@ -385,10 +414,24 @@ else
   (( layout_from_gui )) || select_layout
 fi
 
+# Resolve the plugin-parameter preset the same way: --params/
+# UWB_PARAMS_PRESET or the GUI's PARAMS_PRESET (sourced by run_gui above)
+# win; otherwise fall back to the terminal picker. Only needed when the
+# plugin step runs, since that's the only step that reads it.
+PLUGIN_PARAMS_FILE=""
+if (( ! SKIP_PLUGIN )); then
+  [[ -n "$PARAMS_PRESET" ]] || select_params_preset
+  if ! PLUGIN_PARAMS_FILE="$(resolve_params_preset_file)"; then
+    log_error "Plugin-parameter preset not found: $PARAMS_PRESET (looked for a file at that path, then under $PARAMS_PRESETS_DIR)"
+    exit 1
+  fi
+fi
+
 echo "UWBPX4Sim guided setup"
 echo "======================="
 log_info "UWBPX4Sim root : $SCRIPT_DIR"
 log_info "Layout file    : $LAYOUT_FILE"
+log_info "Params preset  : ${PLUGIN_PARAMS_FILE:-<skipped: --skip-plugin>}"
 log_info "PX4-Autopilot  : $PX4_DIR"
 log_info "ROS 2 workspace: ${ROS_WS:-<not found>}"
 (( DRY_RUN )) && log_warn "Dry-run mode: no files will be changed."
@@ -416,7 +459,6 @@ PX4_GZ_MODELS_DIR="$PX4_DIR/Tools/simulation/gz/models"
 PX4_GZ_WORLDS_DIR="$PX4_DIR/Tools/simulation/gz/worlds"
 PX4_GZ_PLUGINS_DIR="$PX4_DIR/src/modules/simulation/gz_plugins"
 PX4_SERVER_CONFIG="$PX4_DIR/src/modules/simulation/gz_bridge/server.config"
-PLUGIN_PARAMS_FILE="$SCRIPT_DIR/uwb_gazebo_plugin/params.yaml"
 
 if (( ! SKIP_PLUGIN || ! SKIP_MODELS )); then
   if [[ ! -d "$PX4_DIR" ]]; then
@@ -489,10 +531,10 @@ else
   log_step "Step 2/6: Copying uwb_gazebo_plugin into PX4"
   PLUGIN_DEST="$PX4_GZ_PLUGINS_DIR/uwb_gazebo_plugin"
   if (( DRY_RUN )); then
-    log_info "[DRY-RUN] rsync -a --delete --exclude COLCON_IGNORE --exclude params.yaml \"$SCRIPT_DIR/uwb_gazebo_plugin/\" \"$PLUGIN_DEST/\""
+    log_info "[DRY-RUN] rsync -a --delete --exclude COLCON_IGNORE --exclude presets/ \"$SCRIPT_DIR/uwb_gazebo_plugin/\" \"$PLUGIN_DEST/\""
   else
     mkdir -p "$PLUGIN_DEST"
-    rsync -a --delete --exclude COLCON_IGNORE --exclude params.yaml "$SCRIPT_DIR/uwb_gazebo_plugin/" "$PLUGIN_DEST/"
+    rsync -a --delete --exclude COLCON_IGNORE --exclude presets/ "$SCRIPT_DIR/uwb_gazebo_plugin/" "$PLUGIN_DEST/"
     log_ok "Copied uwb_gazebo_plugin -> $PLUGIN_DEST"
   fi
 
@@ -554,7 +596,7 @@ PYEOF
     fi
   fi
 
-  log_step "Syncing plugin parameters from params.yaml into gz_bridge/server.config"
+  log_step "Syncing plugin parameters from preset $(basename "$PLUGIN_PARAMS_FILE") into gz_bridge/server.config"
   if (( DRY_RUN )); then
     log_info "[DRY-RUN] would sync $PLUGIN_PARAMS_FILE into the <plugin ... custom::UWBGazeboSystem> block in $PX4_SERVER_CONFIG"
   else

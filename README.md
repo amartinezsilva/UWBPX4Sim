@@ -23,7 +23,7 @@ It includes:
 - `setup_simulator.sh`: guided setup script (models, plugin, plugin parameters, optional world, optional PX4 rebuild, ROS 2 workspace checks)
 - `simulator_launcher.sh`: tmux-based PX4 SITL launcher
 - `uwb_gazebo_plugin/`: custom Gazebo system plugin source
-- `uwb_gazebo_plugin/params.yaml`: plugin tuning parameters, the single source of truth applied by `setup_simulator.sh`
+- `uwb_gazebo_plugin/presets/`: named plugin-parameter presets (e.g. `eliko_identification`, `util_identification`); `setup_simulator.sh` applies the one you pick
 - `worlds/`: Gazebo worlds used in the experiments
 - `tools/`: helper scripts for sensor layout and mesh generation
 
@@ -47,7 +47,7 @@ The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it c
 3. **Open a shell**: skip the menu and get a plain shell in the container.
 4. **Exit**: stops the container, and asks whether to remove it completely instead (default just stops it) -- everything else, including closing your terminal, leaves it running with your configuration intact. Run `./setup.sh` again any time to get back to this same menu.
 
-`docker-compose.yml` bind-mounts `config/`, `uwb_gazebo_plugin/` (including `params.yaml`), `worlds/`, and `ROS2/px4_sim_offboard/trajectories/` from the host into the container, so editing a layout, plugin parameters, a custom world, or a trajectory CSV on the host takes effect the next time setup (or the simulation) runs -- no rebuild needed.
+`docker-compose.yml` bind-mounts the whole repository (plus `ROS2/px4_sim_offboard/trajectories/` onto its installed path) from the host into the container, so editing a layout, a plugin-parameter preset, a custom world, a trajectory CSV, or the plugin source on the host takes effect the next time setup (or the simulation) runs -- no image rebuild needed.
 
 This image is also the base that [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization)'s own Docker image builds `FROM`, adding its radar/localization stack on top -- see that repo's `docker/` for the layered setup.
 
@@ -80,16 +80,21 @@ The simulated model includes:
 - LOS degradation as a function of distance
 - NLOS degradation as a function of effective blocked thickness along the line of sight
 - Blocked thickness measured directly from world obstacle intersections
+- Optional material-aware NLOS: obstacles tagged with a material (metal, concrete, glass, wood, plastic, cardboard, foam) degrade the link by material first, thickness second, and add a deterministic material bias
 - Optional persistent pair bias
 - One-sided stochastic NLOS noise, so NLOS tends to overestimate range rather than underestimate it
 - Blockage contribution from robot bodies themselves, capped so it cannot by itself exceed Soft NLOS
+- TWR (one range per anchor-tag pair) or TDOA (one range difference per anchor pair and tag) ranging
 
 The NLOS model lets the user tune:
 
 - LOS / Soft NLOS / Hard NLOS / blackout boundaries
 - dropout range and standard-deviation range
 - how much faster Hard NLOS degrades than Soft NLOS
-- how much more important thickness is than distance in NLOS
+- how much more important thickness and material are than distance in NLOS
+- each material's penetration length and permittivity
+
+The exact equations are in [Measurement model](#measurement-model).
 
 The simulated and ground truth ranges for each anchor-tag pair are published as custom Gazebo topics following this criteria:
 
@@ -100,7 +105,9 @@ where `aItJ` denotes anchor `I` and tag `J`.
 
 ## Plugin parameters
 
-The plugin accepts the following parameters. Rather than editing them directly in PX4's `server.config`, edit `uwb_gazebo_plugin/params.yaml` (a plain `key: value` file, one entry per parameter below) and re-run `./setup_simulator.sh` -- it re-syncs the `<plugin>` block in `server.config` from that file every time it runs, so `params.yaml` stays the single source of truth. See [Quick start: automated setup](#quick-start-automated-setup).
+The plugin accepts the following parameters. Rather than editing them directly in PX4's `server.config`, keep them in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file, one entry per parameter below; keys left out use the plugin's compiled-in defaults) and re-run `./setup_simulator.sh` -- it re-syncs the `<plugin>` block in `server.config` from the selected preset every time it runs. Pick the preset with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. See [Quick start: automated setup](#quick-start-automated-setup).
+
+Two presets ship with the repo and are read-only from the GUI, since they carry calibration notes the GUI would drop on save: `eliko_identification` (the original Eliko TWR baseline, used by default under `-y`) and `util_identification` (noise/bias derived from the UTIL TDOA dataset). To tune one, load it in the GUI, adjust the parameters, and save it under a new name (the GUI suggests `<name>_custom`); saving over an existing custom preset asks for confirmation first.
 
 | Parameter | Meaning | Default value |
 | --- | --- | --- |
@@ -130,30 +137,211 @@ The plugin accepts the following parameters. Rather than editing them directly i
 | `uwb_mode` | Ranging mode: `twr` or `tdoa` (see below) | `twr` |
 | `tdoa_topic` | Base topic for simulated TDOA values (tdoa mode only) | `/uwb_gz_simulator/tdoa` |
 | `tdoa_ground_truth_topic` | Base topic for ground-truth TDOA values (tdoa mode only) | `/uwb_gz_simulator/tdoa_ground_truth` |
-| `enable_material_attenuation` | Enables per-obstacle material attenuation (see below) | `false` |
-| `material_attenuation_default` | Multiplier for obstacles without a recognized material tag | `1.0` |
-| `material_attenuation_metal` | Multiplier for obstacles tagged `metal` | `1.0` |
-| `material_attenuation_wood` | Multiplier for obstacles tagged `wood` | `0.08` |
-| `material_attenuation_cardboard` | Multiplier for obstacles tagged `cardboard` | `0.03` |
-| `material_attenuation_plastic` | Multiplier for obstacles tagged `plastic` | `0.15` |
-| `material_attenuation_foam` | Multiplier for obstacles tagged `foam` | `0.02` |
+| `enable_material_attenuation` | Enables the material-aware NLOS model for obstacles tagged `__material_<name>` (see below) | `false` |
+| `material_los_max_severity` | Material severity $s_0$ at or below which a link crossing only tagged obstacles still counts as LOS | `0.05` |
+| `nlos_dropout_material_extra_weight` | Extra material importance for dropout relative to the fixed distance baseline; kept $\ge$ `nlos_dropout_thickness_extra_weight`, range `[0, 2]` | `1.0` |
+| `nlos_stddev_material_extra_weight` | Extra material importance for stddev relative to the fixed distance baseline; kept $\ge$ `nlos_stddev_thickness_extra_weight`, range `[0, 2]` | `1.0` |
+| `material_metal_detour_bias_cm` | Range bias added once to a link crossing any metal obstacle | `35.0` |
+| `material_<name>_penetration_m` | Penetration length $\lambda$ of material `<name>` (`metal`, `concrete`, `glass`, `wood`, `plastic`, `cardboard`, `foam`) | see [Material table](#material-table) |
+| `material_<name>_permittivity` | Relative permittivity $\varepsilon_r$ of dielectric material `<name>` (all of the above except `metal`) | see [Material table](#material-table) |
 
 ### Ranging mode: TWR vs. TDOA
 
 By default (`uwb_mode: twr`) the plugin simulates two-way ranging: one range per anchor-tag pair, published on `topic`/`ground_truth_topic` and (via the offboard nodes) re-packaged into `eliko_messages/DistancesList` -- the same format the real Eliko hardware driver uses, so downstream consumers can't tell the difference between live hardware, simulated TWR, and (with `uwb_mode: tdoa`) simulated TDOA.
 
-Set `uwb_mode: tdoa` to instead simulate time-difference-of-arrival: one differential measurement per anchor-pair-relative-to-tag, matching real TDOA infrastructure like Bitcraze's Loco Positioning System (and the [UTIL dataset](https://utiasdsl.github.io/util-uwb-dataset/) used to calibrate `presets/util_identification.yaml`). The anchor with the lowest numeric id is the reference anchor; for every other anchor, the plugin publishes `d = ‖tag-anchor‖ - ‖tag-anchor_ref‖` (ground truth, per Zhao et al. 2023's TDOA definition) on topics named `a<ref_id>a<other_id>t<tag_id>` under `tdoa_topic`/`tdoa_ground_truth_topic` -- a 3-component name, unlike TWR's 2-component `a<id>t<id>`, to make clear it's a differential, not a range. Noise and dropout reuse the exact same distance/thickness curves as TWR (TDOA noise variance = the sum of the two legs' variances; dropout = either leg failing) -- switching modes doesn't need separate calibration. This mode has no `eliko_messages` equivalent (that format is specific to real TWR hardware), so there's no ROS 2 offboard-node consumption wired up for it yet -- it publishes on its own GZ topics only.
+Set `uwb_mode: tdoa` to instead simulate time-difference-of-arrival: one differential measurement per anchor-pair-relative-to-tag, matching real TDOA infrastructure like Bitcraze's Loco Positioning System (and the [UTIL dataset](https://utiasdsl.github.io/util-uwb-dataset/) used to calibrate `presets/util_identification.yaml`). The anchor with the lowest numeric id is the reference anchor; for every other anchor, the plugin publishes `d = ‖tag-anchor‖ - ‖tag-anchor_ref‖` (ground truth, per Zhao et al. 2023's TDOA definition) on topics named `a<ref_id>a<other_id>t<tag_id>` under `tdoa_topic`/`tdoa_ground_truth_topic` -- a 3-component name, unlike TWR's 2-component `a<id>t<id>`, to make clear it's a differential, not a range. Each of the two legs (tag to reference anchor, tag to the other anchor) goes through the exact same per-link noise/dropout model as a TWR range, and the measurement is their difference -- switching modes doesn't need separate calibration. See [TDOA measurement](#tdoa-measurement) for how the reference leg is shared. This mode has no `eliko_messages` equivalent (that format is specific to real TWR hardware), so there's no ROS 2 offboard-node consumption wired up for it yet -- it publishes on its own GZ topics only.
 
 ### Material-aware NLOS attenuation
 
 By default, every obstacle in the world degrades a measurement the same way, purely by how much of the anchor-tag ray its geometry blocks (`los_max_thickness_m`/`soft_nlos_max_thickness_m`/`blackout_thickness_m` above) -- a cardboard box and a steel one of the same size are treated identically, which isn't realistic (UWB signals pass through cardboard far more easily than metal).
 
-Set `enable_material_attenuation: true` to scale each obstacle's contribution by a material-specific multiplier before it reaches that thickness curve, so a thin metal obstacle can matter as much as a thick wooden one. Tag an obstacle by giving its link or model name a `__material_<name>` suffix, e.g. a wall model named `wall_1__material_metal` -- the same naming-convention style this plugin already uses for `uwb_tag_<id>`/`uwb_anchor_<id>`, rather than a custom SDF element. Obstacles without a recognized suffix fall back to `material_attenuation_default`. The five materials above (and their default multipliers) reflect the *qualitative* ordering seen in the UTIL dataset's NLOS obstacle tests -- cardboard/foam/wood were close to indistinguishable from LOS, metal was severe -- not precisely back-solved coefficients, since UTIL doesn't report the real test obstacles' physical thickness; treat them as a reasonable starting point to tune further, not an exact calibration.
+Set `enable_material_attenuation: true` and tag obstacles by giving their link or model name a `__material_<name>` suffix, e.g. a wall model named `wall_1__material_concrete` or a cabinet link named `door__material_metal` -- the same naming-convention style this plugin already uses for `uwb_tag_<id>`/`uwb_anchor_<id>`, rather than a custom SDF element. Known materials are `metal`, `concrete`, `glass`, `wood`, `plastic`, `cardboard` and `foam`; an unknown name logs a warning once and the obstacle is treated as untagged. Tagged obstacles leave the generic thickness curve and enter a material term that outweighs it, plus a deterministic material bias; untagged obstacles keep the generic curve, so a world can mix both. The full model is described in [Measurement model](#measurement-model).
+
+## Measurement model
+
+Every 100 ms of simulation time, the plugin evaluates each tag-anchor **link** -- its geometry, its LOS/NLOS regime, and from those a noise standard deviation $\sigma$ and a dropout probability $p$ -- and then generates the measurements: one link per TWR range, two links per TDOA value. The three regimes follow one rule of thumb, in decreasing order of influence:
+
+| Regime | What degrades the link |
+| --- | --- |
+| LOS | distance only |
+| NLOS, untagged obstacles | blocked thickness $>$ distance |
+| NLOS, tagged obstacles | material $>$ thickness $>$ distance |
+
+### Link geometry
+
+For a tag at $\mathbf{p}_t$ and an anchor at $\mathbf{a}$, the true range is $d = \lVert \mathbf{p}_t - \mathbf{a} \rVert$. The segment between them (minus `nlos_endpoint_margin_m` at each end, to ignore the vehicles' own mounts) is intersected with the world-axis-aligned bounding box (AABB) of every obstacle link -- every static world model except `ground_plane` and the UWB-carrying vehicles. The chord lengths are merged within each group, so overlapping links of one wall aren't counted twice:
+
+- $\tau_{\text{wall}}$: total chord length through untagged obstacles.
+- $\ell_m$: total chord length through obstacles tagged with material $m$ (material model only; otherwise every obstacle is untagged).
+- $\tau_{\text{body}}$: chord length through the vehicles' `base_link`s, converted to an equivalent thickness that can't on its own exceed Soft NLOS: $\tau_{\text{body}}^{\text{eq}} = 0$ if $\tau_{\text{body}} \le \tau_{\text{LOS}}$, else $\min(\tau_{\text{body}}, \tau_{\text{soft}})$.
+
+The blocked thickness used by the generic curve is $\tau = \tau_{\text{wall}} + \tau_{\text{body}}^{\text{eq}}$.
+
+### Severities
+
+Each degradation factor is mapped to a severity in $[0, 1]$, using
+
+$$
+\operatorname{ramp}(x; a, b) = \operatorname{clamp}\!\left(\frac{x - a}{b - a}, 0, 1\right), \qquad
+E(s; y_0, y_1) = y_0 \left(\frac{y_1}{y_0}\right)^{s}, \qquad
+a \oplus b = a + (1 - a)\, b = 1 - (1 - a)(1 - b).
+$$
+
+$E$ maps a severity onto a parameter range exponentially; $\oplus$ combines two severities so that each only fills the headroom the other leaves (no early saturation).
+
+**Distance** (separate ramps for noise and dropout):
+
+$$
+s_d^{\sigma} = \operatorname{ramp}(d;\ d^{\sigma}_0, d^{\sigma}_1), \qquad
+s_d^{p} = \operatorname{ramp}(d;\ d^{p}_0, d^{p}_1)
+$$
+
+with $d^{\sigma}_{0,1}$ = `los_stddev_start/end_distance_m` and $d^{p}_{0,1}$ = `los_dropout_start/end_distance_m`.
+
+**Thickness** -- piecewise linear, steeper in Hard NLOS by the factor $1 + r$ ($r$ = `hard_nlos_gap_ratio`):
+
+$$
+s_\tau(\tau) =
+\begin{cases}
+0 & \tau \le \tau_{\text{LOS}} \\
+k\,(\tau - \tau_{\text{LOS}}) & \tau_{\text{LOS}} < \tau < \tau_{\text{soft}} \\
+k\,(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)\,k\,(\tau - \tau_{\text{soft}}) & \tau_{\text{soft}} \le \tau < \tau_{\text{blk}} \\
+1 & \tau \ge \tau_{\text{blk}}
+\end{cases}
+\qquad
+k = \frac{1}{(\tau_{\text{soft}} - \tau_{\text{LOS}}) + (1 + r)(\tau_{\text{blk}} - \tau_{\text{soft}})}
+$$
+
+with $\tau_{\text{LOS}}, \tau_{\text{soft}}, \tau_{\text{blk}}$ = `los_max_thickness_m`, `soft_nlos_max_thickness_m`, `blackout_thickness_m`.
+
+**Material** -- Beer-Lambert attenuation, with a per-material penetration length $\lambda_m$:
+
+$$
+A = \sum_m \frac{\ell_m}{\lambda_m}, \qquad
+s_{\text{mat}} = 1 - e^{-A}, \qquad
+\bar s_{\text{mat}} =
+\begin{cases}
+\dfrac{s_{\text{mat}} - s_0}{1 - s_0} & s_{\text{mat}} > s_0 \\
+0 & \text{otherwise}
+\end{cases}
+$$
+
+$s_0$ = `material_los_max_severity` is the material analogue of $\tau_{\text{LOS}}$; re-zeroing at it keeps the term continuous where a link turns NLOS. Because $\lambda_m$ spans four orders of magnitude (0.5 mm for metal, 20 m for foam) while chord lengths typically span one, *which* material is crossed changes the severity far more than *how much* of it -- which is what makes material the dominant factor.
+
+**Material bias** -- tagged materials also delay the first path deterministically. A dielectric slows the signal to $c/\sqrt{\varepsilon_r}$, adding $\ell_m(\sqrt{\varepsilon_{r,m}} - 1)$ of apparent range; a conductor isn't penetrated, so the first path detours around it instead:
+
+$$
+\beta = \sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right) \;+\; \beta_{\text{metal}} \cdot \mathbb{1}[\ell_{\text{metal}} > 0]
+$$
+
+with $\beta_{\text{metal}}$ = `material_metal_detour_bias_cm`, added once per link however many metal obstacles it crosses.
+
+### Noise standard deviation and dropout probability
+
+A link is **NLOS** if $\tau > \tau_{\text{LOS}}$ or $s_{\text{mat}} > s_0$, and **LOS** otherwise. Then, separately for noise ($\sigma$) and dropout ($p$), each with its own distance ramp and extra weights:
+
+$$
+s =
+\begin{cases}
+s_d & \text{LOS} \\
+s_d \;\oplus\; \min\!\big(1,\ g_\tau\, s_\tau(\tau)\big) \;\oplus\; \min\!\big(1,\ g_{\text{mat}}\, \bar s_{\text{mat}}\big) & \text{NLOS}
+\end{cases}
+\qquad g_\tau = 1 + w_\tau, \quad g_{\text{mat}} = 1 + w_{\text{mat}}
+$$
+
+$$
+\sigma = E\big(s^{\sigma};\ \sigma_{\min}, \sigma_{\max}\big), \qquad
+p = E\big(s^{p};\ p_{\min}, p_{\max}\big)
+$$
+
+with $w_\tau$ = `nlos_{stddev,dropout}_thickness_extra_weight` ($[0, 1]$) and $w_{\text{mat}}$ = `nlos_{stddev,dropout}_material_extra_weight` ($[0, 2]$, raised to at least $w_\tau$ if set lower). Without the material model the last term is 0, which is exactly the original thickness-only model. Overrides:
+
+- **Blackout** -- $\tau \ge \tau_{\text{blk}}$: $\sigma = \sigma_{\max}$ and $p = 1$.
+- **Out of range** -- $d >$ `los_hard_dropout_distance_m`: $p = 1$.
+- With `enable_nlos_dropout: false`, dropout ignores obstacles altogether ($s^p = s_d^p$, no blackout); noise still uses the full model.
+
+$\oplus$ is symmetric, so it gives no input priority by itself; the order comes from the gains and scales. Distance has gain 1 and its default ramps only start at 10-15 m, so indoors it barely matters once a link is NLOS; thickness has gain $g_\tau = 1.5$ over roughly a metre of obstacle; material has gain $g_{\text{mat}} = 2$ and the $\lambda_m$ spread above. Some resulting values, with the `eliko_identification` preset, the material model on and $d = 5$ m:
+
+| Link | Regime | $\sigma$ (cm) | $p$ | $\beta$ (cm) |
+| --- | --- | ---: | ---: | ---: |
+| LOS | LOS | 12.0 | 0.020 | 0 |
+| LOS at $d = 40$ m | LOS | 21.7 | 0.134 | 0 |
+| untagged, 0.3 m | NLOS | 16.8 | 0.049 | 0 |
+| untagged, 0.3 m, at $d = 40$ m | NLOS | 26.5 | 0.210 | 0 |
+| untagged, 0.7 m | NLOS | 42.3 | 0.575 | 0 |
+| foam, 0.3 m | LOS | 12.0 | 0.020 | 0.7 |
+| cardboard, 0.3 m | LOS | 12.0 | 0.020 | 2.9 |
+| wood, 0.03 m | LOS | 12.0 | 0.020 | 1.2 |
+| wood, 0.3 m | NLOS | 15.7 | 0.041 | 12.4 |
+| plastic, 0.3 m | NLOS | 22.5 | 0.107 | 17.4 |
+| concrete, 0.2 m | NLOS | 27.8 | 0.188 | 24.7 |
+| metal, 2 mm | NLOS | 50.0 | 0.900 | 35.0 |
+
+### TWR measurement
+
+For anchor $j$ and tag $t$, the ground truth $d_{jt}$ is always published. With probability $p$ no simulated range is published that cycle; otherwise
+
+$$
+\tilde r_{jt} = \max\!\big(0,\ d_{jt} + \tilde n + \beta + b_{jt}\big), \qquad
+n \sim \mathcal{N}(\mu, \sigma^2), \qquad
+\tilde n =
+\begin{cases}
+-n & \text{NLOS and } n < 0 \\
+n & \text{otherwise}
+\end{cases}
+$$
+
+- $\mu$ = `gaussian_noise_mean_cm`.
+- $b_{jt} \sim \mathcal{U}(b_{\min}, b_{\max})$ is drawn once per pair and kept for the whole run (`apply_pair_bias`; 0 otherwise).
+- Folding $n$ in NLOS models the first path arriving late, never early: for $\mu = 0$ it adds a mean of $\sigma\sqrt{2/\pi} \approx 0.8\,\sigma$ that grows with severity, on top of the deterministic $\beta$.
+
+### TDOA measurement
+
+The reference anchor $i$ is the one with the lowest numeric id. Each leg $k$ (tag to anchor $k$) is evaluated as a link of its own, with error
+
+$$
+e_k = \tilde n_k + \beta_k + b_k, \qquad b_k \sim \mathcal{U}(b_{\min}, b_{\max}) \text{ once per anchor}
+$$
+
+($\tilde n_k$ folded in NLOS as above). For every other anchor $j$, the ground truth (Zhao et al. 2023, Eq. 1) and the measurement are
+
+$$
+d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \mathbf{a}_i \rVert, \qquad
+\tilde d_{ij} = d_{ij} + e_j - e_i .
+$$
+
+- **The reference leg is shared.** $e_i$ is drawn once per tag per cycle and enters every $\tilde d_{ij}$ of that tag. If the reference leg drops out (probability $p_i$), all of that tag's TDOA values are lost that cycle; otherwise each $\tilde d_{ij}$ is additionally lost with probability $p_j$. Marginally, $P(\text{lost}) = 1 - (1 - p_i)(1 - p_j)$.
+- **Errors are correlated across pairs**, as on real TDOA hardware: $\operatorname{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \operatorname{Var}(e_i)$, a correlation of 0.5 when all legs have equal $\sigma$.
+- **NLOS errors keep their sign.** NLOS on anchor $j$'s leg pushes $\tilde d_{ij}$ up; NLOS on the reference leg pulls *every* $\tilde d_{ij}$ of that tag down.
+- $\mu$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($b_j - b_i$), not per pair.
+- For LOS legs, $\operatorname{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2$, which is why `presets/util_identification.yaml` derives its per-link $\sigma$ as the measured TDOA spread divided by $\sqrt{2}$.
+
+### Material table
+
+| Material | $\lambda$ (m) | $\varepsilon_r$ | Behaviour |
+| --- | ---: | ---: | --- |
+| `metal` | 0.0005 | -- (conductor) | Any sheet saturates the material term; fixed detour bias $\beta_{\text{metal}}$ |
+| `concrete` | 0.5 | 5.0 | A 20 cm wall: clear NLOS, about 25 cm bias |
+| `glass` | 0.5 | 6.0 | Window panes stay LOS; thick glass degrades like concrete, with a larger bias |
+| `plastic` | 1.0 | 2.5 | Moderate |
+| `wood` | 2.0 | 2.0 | Boards and doors near-LOS; thick furniture mild, with a bias |
+| `cardboard` | 10.0 | 1.2 | Near-LOS |
+| `foam` | 20.0 | 1.05 | Effectively transparent |
+
+The $\varepsilon_r$ values for concrete, glass and wood are close to the ITU-R P.2040 values for building materials at a few GHz; cardboard and foam are mostly air, so their effective $\varepsilon_r$ is close to 1. The $\lambda$ values aren't measured: they're chosen to reproduce the qualitative ordering of the UTIL dataset's NLOS material tests (cardboard, foam and wood close to LOS, plastic worse, metal severe), and the metal detour bias and wood permittivity match UTIL's metal (-34 cm) and wooden-shelf (-15.8 cm) shifts in magnitude. Treat them as a starting point to tune. Override any of them per preset as `material_<name>_penetration_m` / `material_<name>_permittivity`.
+
+### Limitations
+
+- Obstacles are approximated by their world-axis-aligned bounding boxes, so rotated or non-box obstacles over-estimate blocked length.
+- One straight ray per link: no multipath, and no diffraction around obstacle edges (the metal detour bias is a constant, not computed from geometry).
+- Overlapping obstacles of *different* materials each count their own chord length.
+- The outlier-heavy behaviour UTIL shows behind some plastic and cabinet obstacles (mostly accurate readings with occasional large misses) isn't modelled.
+- The TDOA reference anchor is fixed (lowest id), and clock synchronisation between anchors isn't simulated.
 
 
 ## Quick start: automated setup
 
-`setup_simulator.sh` automates everything described in [1. Setting up the experiment](#1-setting-up-the-experiment) and [2. Setting up the plugin in PX4 SITL](#2-setting-up-the-plugin-in-px4-sitl) below: generating models and the ROS 2 bridge config from a layout YAML, copying the models and plugin into your PX4 checkout, registering the plugin in PX4's build and `server.config` (with parameters synced from `uwb_gazebo_plugin/params.yaml`), optionally installing a custom world, optionally rebuilding PX4, and checking the ROS 2 workspace side. It is safe to re-run any time -- re-running never duplicates entries and only touches files that actually changed.
+`setup_simulator.sh` automates everything described in [1. Setting up the experiment](#1-setting-up-the-experiment) and [2. Setting up the plugin in PX4 SITL](#2-setting-up-the-plugin-in-px4-sitl) below: generating models and the ROS 2 bridge config from a layout YAML, copying the models and plugin into your PX4 checkout, registering the plugin in PX4's build and `server.config` (with parameters synced from a preset under `uwb_gazebo_plugin/presets/`), optionally installing a custom world, optionally rebuilding PX4, and checking the ROS 2 workspace side. It is safe to re-run any time -- re-running never duplicates entries and only touches files that actually changed.
 
 From the repository root:
 
@@ -169,6 +357,7 @@ Common options:
 
 ```bash
 ./setup_simulator.sh --layout config/demo_nlos.yaml                        # use a specific layout, skip the picker
+./setup_simulator.sh --params util_identification                          # use a specific plugin-parameter preset, skip the picker
 ./setup_simulator.sh --px4-dir /path/to/PX4-Autopilot --ros-ws /path/to/ros_ws   # non-default locations
 ./setup_simulator.sh -y                                                     # non-interactive, safe defaults (skips optional world/rebuild unless also given --build/--world)
 ./setup_simulator.sh -n                                                     # dry run: print what would happen, change nothing
@@ -178,7 +367,7 @@ Common options:
 Re-run it whenever you:
 
 - change the layout YAML (add/remove robots, move sensors)
-- edit `uwb_gazebo_plugin/params.yaml` to retune the plugin's NLOS/noise model
+- edit or switch plugin-parameter presets to retune the plugin's NLOS/noise model
 - point it at a freshly cloned PX4 checkout that doesn't have the plugin yet
 
 After it finishes, it prints the exact `export` commands and the `./simulator_launcher.sh` invocation to launch the simulation (see [4. Running the simulation](#4-running-the-simulation)).
@@ -365,7 +554,7 @@ The UGV additionally publishes an aggregated list of UWB ranges using `eliko_mes
 
 ## 2. Setting up the plugin in PX4 SITL
 
-**Note**: `setup_simulator.sh` automates every step below (including syncing plugin parameters from `uwb_gazebo_plugin/params.yaml`, idempotently) as part of the [automated setup](#quick-start-automated-setup). Read on if you want to do it by hand, or to understand what the script is doing.
+**Note**: `setup_simulator.sh` automates every step below (including syncing plugin parameters from the selected preset under `uwb_gazebo_plugin/presets/`, idempotently) as part of the [automated setup](#quick-start-automated-setup). Read on if you want to do it by hand, or to understand what the script is doing.
 
 1. Copy the generated model folders from `models/custom_models/` into:
 
@@ -395,7 +584,7 @@ add_custom_target(px4_gz_plugins ALL DEPENDS OpticalFlowSystem MovingPlatformCon
 <PX4-Autopilot>/src/modules/simulation/gz_bridge/server.config
 ```
 
-The parameter values inside the block come from `uwb_gazebo_plugin/params.yaml` -- edit that file (see [Plugin parameters](#plugin-parameters)) rather than hand-editing this block, since `setup_simulator.sh` overwrites it from `params.yaml` on every run. The block below shows the current defaults, for reference / manual setup:
+The parameter values inside the block come from the selected preset under `uwb_gazebo_plugin/presets/` -- edit or pick a preset (see [Plugin parameters](#plugin-parameters)) rather than hand-editing this block, since `setup_simulator.sh` overwrites it from that preset on every run. The block below shows the current defaults, for reference / manual setup:
 
 ```xml
 <plugin entity_name="*" entity_type="world" filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem">
@@ -436,12 +625,13 @@ The parameter values inside the block come from `uwb_gazebo_plugin/params.yaml` 
   <tdoa_ground_truth_topic>/uwb_gz_simulator/tdoa_ground_truth</tdoa_ground_truth_topic>
 
   <enable_material_attenuation>false</enable_material_attenuation>
-  <material_attenuation_default>1.0</material_attenuation_default>
-  <material_attenuation_metal>1.0</material_attenuation_metal>
-  <material_attenuation_wood>0.08</material_attenuation_wood>
-  <material_attenuation_cardboard>0.03</material_attenuation_cardboard>
-  <material_attenuation_plastic>0.15</material_attenuation_plastic>
-  <material_attenuation_foam>0.02</material_attenuation_foam>
+  <material_los_max_severity>0.05</material_los_max_severity>
+  <nlos_dropout_material_extra_weight>1.0</nlos_dropout_material_extra_weight>
+  <nlos_stddev_material_extra_weight>1.0</nlos_stddev_material_extra_weight>
+  <material_metal_detour_bias_cm>35.0</material_metal_detour_bias_cm>
+  <!-- Optional per-material overrides (defaults: see "Material table"), e.g.: -->
+  <!-- <material_concrete_penetration_m>0.5</material_concrete_penetration_m> -->
+  <!-- <material_concrete_permittivity>5.0</material_concrete_permittivity> -->
 </plugin>
 ```
 

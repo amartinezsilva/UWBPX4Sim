@@ -46,12 +46,25 @@ const PARAM_UI = {
   tdoa_topic: { type: "text" },
   tdoa_ground_truth_topic: { type: "text" },
   enable_material_attenuation: { type: "bool" },
-  material_attenuation_default: { type: "slider", min: 0, max: 2, step: 0.01 },
-  material_attenuation_metal: { type: "slider", min: 0, max: 2, step: 0.01 },
-  material_attenuation_wood: { type: "slider", min: 0, max: 2, step: 0.01 },
-  material_attenuation_cardboard: { type: "slider", min: 0, max: 2, step: 0.01 },
-  material_attenuation_plastic: { type: "slider", min: 0, max: 2, step: 0.01 },
-  material_attenuation_foam: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_los_max_severity: { type: "slider", min: 0, max: 0.5, step: 0.01 },
+  nlos_dropout_material_extra_weight: { type: "slider", min: 0, max: 2, step: 0.05 },
+  nlos_stddev_material_extra_weight: { type: "slider", min: 0, max: 2, step: 0.05 },
+  material_metal_detour_bias_cm: { type: "slider", min: 0, max: 100, step: 1 },
+  // Penetration lengths span mm (metal) to tens of m (foam): plain number
+  // inputs, since no single linear slider range fits them all.
+  material_metal_penetration_m: { type: "number", step: 0.0001 },
+  material_concrete_penetration_m: { type: "number", step: 0.01 },
+  material_glass_penetration_m: { type: "number", step: 0.01 },
+  material_wood_penetration_m: { type: "number", step: 0.1 },
+  material_plastic_penetration_m: { type: "number", step: 0.1 },
+  material_cardboard_penetration_m: { type: "number", step: 0.5 },
+  material_foam_penetration_m: { type: "number", step: 0.5 },
+  material_concrete_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
+  material_glass_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
+  material_wood_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
+  material_plastic_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
+  material_cardboard_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
+  material_foam_permittivity: { type: "slider", min: 1, max: 10, step: 0.05 },
 };
 
 let trajectoryOptions = [];
@@ -83,7 +96,11 @@ function setStatus(id, msg, ok) {
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -344,6 +361,31 @@ document.getElementById("layout-save").addEventListener("click", async () => {
 let paramGroups = [];
 let paramValues = {};
 let currentParamsPreset = null;
+// [{name, builtin}] from /api/params/presets. Built-in presets are
+// read-only (the backend refuses to overwrite them).
+let paramPresets = [];
+// paramValues as last loaded/saved, to tell whether the form has been
+// edited since -- Continue only re-saves a preset when it has.
+let paramValuesSnapshot = "{}";
+
+function markParamsClean() {
+  paramValuesSnapshot = JSON.stringify(paramValues);
+}
+
+function paramsDirty() {
+  return JSON.stringify(paramValues) !== paramValuesSnapshot;
+}
+
+function isBuiltinPreset(name) {
+  return paramPresets.some((p) => p.name === name && p.builtin);
+}
+
+function suggestCustomPresetName(name) {
+  const input = document.getElementById("params-preset-name");
+  input.value = name + "_custom";
+  input.focus();
+  input.select();
+}
 
 function renderParamRow(key) {
   const ui = PARAM_UI[key] || { type: "text" };
@@ -410,11 +452,13 @@ function renderParamGroups() {
 }
 
 async function refreshParamPresets(selected) {
-  const names = await api("/api/params/presets");
+  paramPresets = await api("/api/params/presets");
   const select = document.getElementById("params-preset");
   select.innerHTML = "";
-  names.forEach((n) => select.appendChild(el("option", { value: n, text: n })));
-  if (selected && names.includes(selected)) select.value = selected;
+  paramPresets.forEach((p) =>
+    select.appendChild(el("option", { value: p.name, text: p.builtin ? p.name + " (built-in)" : p.name })),
+  );
+  if (selected && paramPresets.some((p) => p.name === selected)) select.value = selected;
 }
 
 document.getElementById("params-load").addEventListener("click", async () => {
@@ -423,20 +467,47 @@ document.getElementById("params-load").addEventListener("click", async () => {
   try {
     paramValues = await api("/api/params/presets/" + encodeURIComponent(name));
     currentParamsPreset = name;
+    markParamsClean();
     document.getElementById("params-preset-name").value = name;
     renderParamGroups();
-    setStatus("params-status", "Loaded preset " + name + ".", true);
+    setStatus(
+      "params-status",
+      isBuiltinPreset(name)
+        ? "Loaded built-in preset " + name + " (read-only: save changes under a new name)."
+        : "Loaded preset " + name + ".",
+      true,
+    );
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
 });
 
+// Saves paramValues as preset `name`. Returns false if the user declined
+// to overwrite an existing preset; throws on any other failure (including
+// trying to save over a built-in preset, which also pre-fills a
+// "<name>_custom" suggestion in the name field).
 async function saveParamPreset(name) {
-  await api("/api/params/presets/" + encodeURIComponent(name), {
+  if (isBuiltinPreset(name)) {
+    suggestCustomPresetName(name);
+    throw new Error(name + " is a built-in preset and can't be overwritten. Save your changes under a new name.");
+  }
+  const url = "/api/params/presets/" + encodeURIComponent(name);
+  const opts = {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(paramValues),
-  });
+  };
+  try {
+    await api(url, opts);
+  } catch (e) {
+    if (e.status !== 409) throw e;
+    if (!confirm('Preset "' + name + '" already exists. Overwrite it?')) return false;
+    await api(url + "?overwrite=1", opts);
+  }
+  currentParamsPreset = name;
+  markParamsClean();
+  await refreshParamPresets(name);
+  return true;
 }
 
 document.getElementById("params-save-preset").addEventListener("click", async () => {
@@ -446,10 +517,11 @@ document.getElementById("params-save-preset").addEventListener("click", async ()
     return;
   }
   try {
-    await saveParamPreset(name);
-    currentParamsPreset = name;
-    await refreshParamPresets(name);
-    setStatus("params-status", "Saved preset " + name + ".", true);
+    if (await saveParamPreset(name)) {
+      setStatus("params-status", "Saved preset " + name + ".", true);
+    } else {
+      setStatus("params-status", "Not saved: " + name + " was left unchanged.", false);
+    }
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
@@ -468,9 +540,17 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
   }
   setStatus("continue-status", "Saving...");
   try {
+    // Re-save the preset only if the form was edited or a different name
+    // was typed -- continuing with an untouched preset (built-in or not)
+    // uses it as-is. Done before saving the layout, so declining an
+    // overwrite doesn't leave a half-finished Continue behind.
+    if (presetName !== currentParamsPreset || paramsDirty()) {
+      if (!(await saveParamPreset(presetName))) {
+        setStatus("continue-status", "Cancelled: pick another preset name, or confirm the overwrite.", false);
+        return;
+      }
+    }
     await saveLayout(filename);
-    await saveParamPreset(presetName);
-    currentParamsPreset = presetName;
     await api("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -499,6 +579,7 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
   paramGroups = data.groups;
   paramValues = data.values;
   currentParamsPreset = data.preset || null;
+  markParamsClean();
   await refreshParamPresets(currentParamsPreset);
   if (currentParamsPreset) document.getElementById("params-preset-name").value = currentParamsPreset;
   renderParamGroups();
