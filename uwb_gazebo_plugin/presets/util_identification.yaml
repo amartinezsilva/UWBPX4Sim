@@ -51,8 +51,8 @@ nlos_endpoint_margin_m: 0.02
 nlos_min_loss_db: 3.0
 body_shadow_max_loss_db: 10.0
 
-# Materials: on. Bitcraze LPS runs the DW1000 on channel 2 (~4 GHz) by
-# default -- verify against the dataset's setup if exact rates matter.
+# Materials: on, at DW1000 channel 2 (~4 GHz), Bitcraze LPS's default --
+# verify against the dataset's setup if exact rates matter.
 #
 # UTIL's anAn/anTag NLOS material tests (cardboard, foam, wood, plastic,
 # metal) show materials do NOT degrade the signal uniformly:

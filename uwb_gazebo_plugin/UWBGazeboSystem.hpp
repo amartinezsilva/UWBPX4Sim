@@ -145,9 +145,10 @@ private:
   // carries a "__material_<name>" suffix (see extractMaterialName in the
   // .cpp) use that material's row instead.
   bool enableMaterialAttenuation_{false};
-  // Carrier frequency at which the ITU-R P.2040 materials' attenuation
-  // rates are evaluated (DW1000 channel 5 by default).
-  double carrierFrequencyGhz_{6.5};
+  // Carrier frequency at which the materials' attenuation rates are
+  // evaluated (DW1000 channel 2 by default, as used by Eliko KIO and
+  // Bitcraze LPS).
+  double carrierFrequencyGhz_{4.0};
   // Loss and range bias added once to a link crossing any metal: the first
   // path detours around the conductor instead of going through it.
   double metalDetourLossDb_{20.0};

@@ -176,7 +176,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         ]),
         ("Materials (obstacles named *__material_<name>).", [
             ("enable_material_attenuation", False),
-            ("carrier_frequency_ghz", 6.5),
+            ("carrier_frequency_ghz", 4.0),
             ("material_metal_detour_loss_db", 20.0),
             ("material_metal_detour_bias_cm", 35.0),
         ]),

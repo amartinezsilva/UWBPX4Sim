@@ -49,10 +49,11 @@ nlos_min_loss_db: 3.0
 body_shadow_max_loss_db: 10.0
 
 # Materials: off -- every obstacle is the generic material (plasterboard's
-# ITU-R P.2040 rate at carrier_frequency_ghz). Set carrier_frequency_ghz to
-# the Eliko units' channel if known.
+# ITU-R P.2040 rate at carrier_frequency_ghz). 4 GHz is DW1000 channel 2:
+# Eliko KIO's FCC grant (FCC ID 2AF2IKIO4) covers 3300-4450 MHz, which only
+# channel 2 fits entirely.
 enable_material_attenuation: false
-carrier_frequency_ghz: 6.5
+carrier_frequency_ghz: 4.0
 material_metal_detour_loss_db: 20.0
 material_metal_detour_bias_cm: 35.0
 

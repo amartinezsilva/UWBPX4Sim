@@ -76,7 +76,7 @@ If you are unsure whether your PX4/ROS 2/Gazebo setup is healthy, it is worth fi
 
 ## Measurement model
 
-The `UWBGazeboPlugin` system simulates UWB measurements between UGV anchors and UAV tags with a **link budget**. Every 100 ms of simulation time it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 12 dB, and a 20 cm concrete wall about 29 dB.
+The `UWBGazeboPlugin` system simulates UWB measurements between UGV anchors and UAV tags with a **link budget**. Every 100 ms of simulation time it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 8 dB, and a 20 cm concrete wall about 20 dB (at 4 GHz).
 
 Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The two shipped presets, `eliko_identification` (Eliko TWR, the default under `-y`) and `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset), are read-only from the GUI: tune one and save it under a new name.
 
@@ -114,7 +114,7 @@ A link is **NLOS** if $`L_{\text{obs}} \ge`$ `nlos_min_loss_db` (3 dB by default
 | Hard NLOS | NLOS and $`L_{\sigma 0} \le L < L_{\max}`$ | $`\sigma`$ and $`p`$ grow |
 | Blackout | $`L \ge L_{\max}`$ | no measurement |
 
-At the 3.7 m separation of the paper's NLOS experiment, a 0.25 m generic wall sits right at the Soft/Hard boundary ($`\sigma`$ = 12.1 cm), 0.5 m is Hard NLOS and 0.75 m is already Blackout; the same 0.25 m wall at 20 m is Blackout.
+At the 3.7 m separation of the paper's NLOS experiment, generic walls of 0.25 m, 0.75 m and 1.2 m fall in Soft NLOS, Hard NLOS and Blackout respectively, as in that experiment; the same 0.25 m wall at 20 m is already Hard NLOS.
 
 ### Noise standard deviation and dropout probability
 
@@ -132,16 +132,14 @@ p =
 - $`p`$ combines an independent floor $`p_{\min}`$ = `min_dropout_probability` (random packet loss) with a logistic link failure as the budget runs out, centred on $`L_{50}`$ = `dropout_mid_loss_db` with width $`w`$ = `dropout_width_db`. Beyond $`L_{\max}`$ = `max_link_loss_db` the link is closed.
 - With `enable_nlos_dropout: false`, dropout uses $`L_d`$ only (obstacles don't drop measurements); noise still uses the full $`L`$.
 
-**Eliko calibration.** The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bias, robots < 10 m apart) and completed with the datasheet's 75 m maximum range and ~50 cm noise near it (see the Robot Meets Ranging workshop paper, Section II-B and Table II). With $`n = 2`$, 15 m and 75 m are 23.5 dB and 37.5 dB, so the defaults reproduce those points exactly; between them the curves follow the link budget's shape instead of the previous assumed exponential-in-distance one:
+**Eliko calibration.** The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bias, robots < 10 m apart) and completed with the datasheet's 75 m maximum range and ~50 cm noise near it (see the Robot Meets Ranging workshop paper, Section II-B and Table II). With $`n = 2`$, 15 m and 75 m are 23.5 dB and 37.5 dB, so the defaults reproduce those points exactly, and the link budget sets the shape in between:
 
 | $`d`$ (m) | 5 | 10 | 15 | 30 | 45 | 60 | 70 | > 75 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| $`\sigma`$ (cm), previous model | 12.0 | 12.0 | 12.0 | 17.1 | 24.5 | 35.0 | 44.4 | -- |
-| $`\sigma`$ (cm), link budget | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
-| $`p`$, previous model | 0.020 | 0.020 | 0.027 | 0.071 | 0.184 | 0.477 | 0.900 | 1 |
-| $`p`$, link budget | 0.020 | 0.020 | 0.020 | 0.032 | 0.161 | 0.523 | 0.737 | 1 |
+| $`\sigma`$ (cm) | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
+| $`p`$ | 0.020 | 0.020 | 0.020 | 0.032 | 0.161 | 0.523 | 0.737 | 1 |
 
-$`L_{50}`$ and $`w`$ are a least-squares fit to the previous dropout curve over 10-70 m (rms error 0.04). The dataset doesn't cover NLOS, so obstacle losses come from the material rates rather than from that calibration.
+$`L_{50}`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04). The dataset doesn't cover NLOS, so obstacle losses come from the material rates rather than from that calibration.
 
 ### Material bias
 
@@ -208,20 +206,21 @@ Attenuation rates $`\alpha`$ (dB/m) at DW1000 channels 2 and 5, and relative per
 | `foam` | 1.05 | 0.2 | 0.3 | $`\tan\delta = 0.0005`$ |
 | `metal` | -- | -- | -- | detour: 20 dB, 35 cm |
 
-The plastic, cardboard and foam loss tangents and the metal detour values aren't from a standard: they're chosen to match the UTIL dataset's NLOS material tests (cardboard, foam and wood close to LOS, metal severe with a ~34 cm shift). Some resulting links with the `eliko_identification` defaults (6.5 GHz, material model on):
+The plastic, cardboard and foam loss tangents and the metal detour values aren't from a standard: they're chosen to match the UTIL dataset's NLOS material tests (cardboard, foam and wood close to LOS, metal severe with a ~34 cm shift). Some resulting links with the `eliko_identification` defaults (4 GHz, material model on):
 
 | Link | $`L_{\text{obs}}`$ (dB) | $`L`$ (dB) | Regime | $`\sigma`$ (cm) | $`p`$ | $`\beta`$ (cm) |
 | --- | ---: | ---: | --- | ---: | ---: | ---: |
 | LOS, 5 m / 40 m / 70 m | 0 | 14.0 / 32.0 / 36.9 | LOS | 12.0 / 28.7 / 47.0 | 0.020 / 0.096 / 0.737 | 0 |
-| generic 0.25 m, 3.7 m | 12.2 | 23.6 | NLOS | 12.1 | 0.020 | 0 |
-| generic 0.25 m, 20 m | 12.2 | 38.2 | NLOS | 50.0 | 1 | 0 |
-| generic 0.5 m, 3.7 m | 24.4 | 35.8 | NLOS | 42.0 | 0.560 | 0 |
-| generic 0.75 m, 3.7 m | 36.6 | 48.0 | NLOS | 50.0 | 1 | 0 |
-| foam / cardboard 0.3 m, glass 6 mm, 5 m | < 1 | 14-15 | LOS | 12.0 | 0.020 | 0.7 / 2.9 / 0.9 |
-| plastic 0.3 m, 5 m | 2.8 | 16.8 | LOS | 12.0 | 0.020 | 17.4 |
-| wood 0.3 m, 5 m | 12.2 | 26.1 | NLOS | 15.7 | 0.021 | 12.3 |
-| metal, 5 m | 20.0 | 34.0 | NLOS | 34.9 | 0.267 | 35.0 |
-| concrete 0.2 m, 5 m | 28.6 | 42.5 | NLOS | 50.0 | 1 | 25.8 |
+| generic 0.25 m, 3.7 m | 7.7 | 19.1 | Soft NLOS | 12.0 | 0.020 | 0 |
+| generic 0.25 m, 20 m | 7.7 | 33.8 | Hard NLOS | 34.1 | 0.239 | 0 |
+| generic 0.5 m, 3.7 m | 15.5 | 26.8 | Hard NLOS | 16.9 | 0.022 | 0 |
+| generic 0.75 m, 3.7 m | 23.2 | 34.6 | Hard NLOS | 37.1 | 0.355 | 0 |
+| generic 1.0 m, 3.7 m | 31.0 | 42.4 | Blackout | -- | 1 | 0 |
+| foam / cardboard 0.3 m, glass 6 mm, 5 m | < 1 | 14.0-14.3 | LOS | 12.0 | 0.020 | 0.7 / 2.9 / 0.9 |
+| plastic 0.3 m, 5 m | 1.7 | 15.7 | LOS | 12.0 | 0.020 | 17.4 |
+| wood 0.3 m, 5 m | 7.2 | 21.2 | Soft NLOS | 12.0 | 0.020 | 12.3 |
+| concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.211 | 25.8 |
+| metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.267 | 35.0 |
 
 The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows).
 
@@ -258,7 +257,7 @@ The same wall matters more the farther apart the robots are, since it eats into 
 | `body_shadow_max_loss_db` | $`L_{\text{body}}`$ | `10.0` |
 | **Materials** | | |
 | `enable_material_attenuation` | `__material_<name>` tags on/off | `false` |
-| `carrier_frequency_ghz` | $`f`$ | `6.5` |
+| `carrier_frequency_ghz` | $`f`$ (DW1000 channel 2) | `4.0` |
 | `material_<name>_attenuation_db_per_m` | $`\alpha_m`$ override (any material but `metal`) | from $`f`$, see [Material table](#material-table) |
 | `material_<name>_permittivity` | $`\varepsilon_{r,m}`$ override (any material but `metal`) | see [Material table](#material-table) |
 | `material_metal_detour_loss_db`, `material_metal_detour_bias_cm` | $`L_{\text{metal}}`$, $`\beta_{\text{metal}}`$ | `20.0`, `35.0` |
@@ -541,11 +540,11 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <body_shadow_max_loss_db>10.0</body_shadow_max_loss_db>
 
   <enable_material_attenuation>false</enable_material_attenuation>
-  <carrier_frequency_ghz>6.5</carrier_frequency_ghz>
+  <carrier_frequency_ghz>4.0</carrier_frequency_ghz>
   <material_metal_detour_loss_db>20.0</material_metal_detour_loss_db>
   <material_metal_detour_bias_cm>35.0</material_metal_detour_bias_cm>
   <!-- Optional per-material overrides (defaults: see "Material table"), e.g.: -->
-  <!-- <material_concrete_attenuation_db_per_m>142.8</material_concrete_attenuation_db_per_m> -->
+  <!-- <material_concrete_attenuation_db_per_m>97.7</material_concrete_attenuation_db_per_m> -->
 
   <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
   <apply_pair_bias>false</apply_pair_bias>
