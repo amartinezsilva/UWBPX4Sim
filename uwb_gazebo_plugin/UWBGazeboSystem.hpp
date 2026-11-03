@@ -6,6 +6,7 @@
 #include <unordered_map>
 #include <random>
 #include <chrono>
+#include <string>
 
 namespace custom
 {
@@ -71,6 +72,15 @@ private:
   /// \return Noise standard deviation in centimeters.
   double ComputeNoiseStddevCm(double distanceM, double blockedThicknessM) const;
 
+  /// \brief Looks up the attenuation multiplier for a material name.
+  /// \details Falls back to materialAttenuationDefault_ for names not
+  /// present in materialAttenuation_ (including when material attenuation
+  /// is disabled, which leaves the map empty by construction).
+  /// \param[in] materialName Lowercase material keyword, or empty.
+  /// \return Attenuation multiplier applied to that obstacle's raw
+  /// AABB-intersection length before the thickness-severity curve.
+  double MaterialAttenuationFor(const std::string &materialName) const;
+
   /// \brief Validates and normalizes user-provided plugin parameters.
   /// \details This method enforces valid ordering of thresholds, clamps values
   /// to physically meaningful ranges, and restores safe defaults when needed.
@@ -123,5 +133,38 @@ private:
   // normalized extra-weight parameters add to the fixed baseline gain of 1.0.
   double nlosDropoutThicknessExtraWeight_{0.50};
   double nlosStddevThicknessExtraWeight_{0.50};
+
+  // --- Ranging mode: TWR (default, one range per anchor-tag pair) or TDOA
+  // (one differential measurement per anchor-pair-relative-to-tag, matching
+  // real TDOA infrastructure like Bitcraze's LPS). A global switch, not
+  // per-pair, since real deployments use one or the other for the whole
+  // anchor infrastructure, never both.
+  enum class UwbMode { Twr, Tdoa };
+  UwbMode uwbMode_{UwbMode::Twr};
+  // Topics used only in TDOA mode (kept separate from topic_/groundTruthTopic_
+  // -- a TDOA value isn't a distance, and conflating them would mislead any
+  // downstream consumer expecting the existing TWR topics' semantics).
+  std::string tdoaTopic_ = "/uwb_gz_simulator/tdoa";
+  std::string tdoaGroundTruthTopic_ = "/uwb_gz_simulator/tdoa_ground_truth";
+
+  // --- Material-aware NLOS attenuation (opt-in, off by default so existing
+  // worlds/layouts that don't name obstacles by material keep their current
+  // behaviour byte-for-byte). When enabled, each obstacle link's own
+  // AABB-intersection length is scaled by its material's attenuation
+  // multiplier (relative to the generic/unscaled thickness this plugin
+  // already used, i.e. 1.0) before entering the existing thickness-severity
+  // curve -- see ThicknessSeverity, ComputeNoiseStddevCm,
+  // ComputeDropoutProbability, which are unchanged.
+  bool enableMaterialAttenuation_{false};
+  // Applied to any obstacle whose name doesn't carry a recognized
+  // "__material_<name>" suffix (see ExtractMaterialName in the .cpp) --
+  // 1.0 reproduces the old undifferentiated behaviour for untagged obstacles.
+  double materialAttenuationDefault_{1.0};
+  // Keyed by material name (lowercase, matching the "__material_<name>"
+  // suffix). Populated in Configure() from fixed "material_attenuation_
+  // <name>" SDF parameters -- not a free-form map, so there's no custom SDF
+  // parsing involved, just more scalar Get<double> calls like every other
+  // parameter here. Unrecognized names fall back to materialAttenuationDefault_.
+  std::unordered_map<std::string, double> materialAttenuation_;
 };
 }

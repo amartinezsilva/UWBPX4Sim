@@ -11,7 +11,7 @@
 #   3. Copy uwb_gazebo_plugin/ into <PX4-Autopilot>/src/modules/simulation/gz_plugins
 #   4. Register the plugin in gz_plugins/CMakeLists.txt
 #   5. Register the plugin instance in gz_bridge/server.config, with its
-#      parameter values synced from uwb_gazebo_plugin/params.yaml
+#      parameter values synced from a preset under uwb_gazebo_plugin/presets/
 #   6. Copy every custom world (worlds/*.sdf) into PX4, then select one by
 #      name -- from the layout's own `world:` field, --world, or the
 #      terminal picker -- falling back to PX4's default world if the name
@@ -36,9 +36,11 @@ SKIP_ROS=0
 WORLD_ARG=""
 
 CONFIG_DIR="$SCRIPT_DIR/config"
+PARAMS_PRESETS_DIR="$SCRIPT_DIR/uwb_gazebo_plugin/presets"
 GUI_PORT="${UWB_GUI_PORT:-5050}"
 
 LAYOUT_FILE="${UWB_LAYOUT_FILE:-}"
+PARAMS_PRESET="${UWB_PARAMS_PRESET:-}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-}"
 
@@ -238,6 +240,67 @@ select_layout() {
       return
     fi
     echo "Invalid selection: '$reply'. Enter a number between 1 and ${#layouts[@]}."
+  done
+}
+
+preset_name_from_path() {
+  # Strips presets/<name>.yaml down to just <name>, the user-facing form
+  # (--params <name>, PARAMS_PRESET=<name> from the GUI) used everywhere
+  # presets are referenced, same as the GUI's /api/params/presets/<name>.
+  local base
+  base="$(basename "$1")"
+  base="${base%.yaml}"
+  base="${base%.yml}"
+  printf '%s' "$base"
+}
+
+select_params_preset() {
+  # Populates PARAMS_PRESET (a bare preset name, not a path), either by
+  # listing presets/*.yaml for the user to pick from, or (under -y) by
+  # auto-selecting a sensible default. Mirrors select_layout() above;
+  # unlike worlds, a plugin-parameter preset is mandatory, so an empty
+  # presets dir is an error.
+  local presets=() reply i default
+
+  shopt -s nullglob
+  presets=("$PARAMS_PRESETS_DIR"/*.yaml "$PARAMS_PRESETS_DIR"/*.yml)
+  shopt -u nullglob
+  if (( ${#presets[@]} > 0 )); then
+    mapfile -t presets < <(printf '%s\n' "${presets[@]}" | sort -u)
+  fi
+
+  if (( ${#presets[@]} == 0 )); then
+    log_error "No plugin-parameter preset YAML files found under $PARAMS_PRESETS_DIR"
+    exit 1
+  fi
+
+  if (( ASSUME_YES )); then
+    default="$PARAMS_PRESETS_DIR/eliko_identification.yaml"
+    for i in "${!presets[@]}"; do
+      if [[ "${presets[$i]}" == "$default" ]]; then
+        PARAMS_PRESET="$(preset_name_from_path "$default")"
+        log_info "Non-interactive: selected default plugin-parameter preset $PARAMS_PRESET"
+        return
+      fi
+    done
+    PARAMS_PRESET="$(preset_name_from_path "${presets[0]}")"
+    log_info "Non-interactive: selected plugin-parameter preset $PARAMS_PRESET (first available; no --params given)"
+    return
+  fi
+
+  echo
+  echo "Available plugin-parameter presets in $PARAMS_PRESETS_DIR:"
+  for i in "${!presets[@]}"; do
+    printf '  %d) %s\n' "$((i + 1))" "$(basename "${presets[$i]}")"
+  done
+
+  while true; do
+    read -r -p "Select a plugin-parameter preset [1-${#presets[@]}]: " reply || { log_error "No input received."; exit 1; }
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#presets[@]} )); then
+      PARAMS_PRESET="$(preset_name_from_path "${presets[$((reply - 1))]}")"
+      return
+    fi
+    echo "Invalid selection: '$reply'. Enter a number between 1 and ${#presets[@]}."
   done
 }
 

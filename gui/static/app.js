@@ -42,6 +42,16 @@ const PARAM_UI = {
   los_stddev_end_distance_m: { type: "slider", min: 0, max: 150, step: 0.5 },
   nlos_dropout_thickness_extra_weight: { type: "slider", min: 0, max: 2, step: 0.01 },
   nlos_stddev_thickness_extra_weight: { type: "slider", min: 0, max: 2, step: 0.01 },
+  uwb_mode: { type: "select", options: ["twr", "tdoa"] },
+  tdoa_topic: { type: "text" },
+  tdoa_ground_truth_topic: { type: "text" },
+  enable_material_attenuation: { type: "bool" },
+  material_attenuation_default: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_attenuation_metal: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_attenuation_wood: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_attenuation_cardboard: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_attenuation_plastic: { type: "slider", min: 0, max: 2, step: 0.01 },
+  material_attenuation_foam: { type: "slider", min: 0, max: 2, step: 0.01 },
 };
 
 let trajectoryOptions = [];
@@ -333,6 +343,7 @@ document.getElementById("layout-save").addEventListener("click", async () => {
 
 let paramGroups = [];
 let paramValues = {};
+let currentParamsPreset = null;
 
 function renderParamRow(key) {
   const ui = PARAM_UI[key] || { type: "text" };
@@ -344,6 +355,13 @@ function renderParamRow(key) {
     cb.checked = !!paramValues[key];
     cb.addEventListener("change", () => (paramValues[key] = cb.checked));
     row.appendChild(cb);
+    row.appendChild(el("span"));
+  } else if (ui.type === "select") {
+    const select = el("select", {});
+    ui.options.forEach((optValue) => select.appendChild(el("option", { value: optValue, text: optValue })));
+    select.value = paramValues[key];
+    select.addEventListener("change", () => (paramValues[key] = select.value));
+    row.appendChild(select);
     row.appendChild(el("span"));
   } else if (ui.type === "slider") {
     const range = el("input", {
@@ -391,29 +409,35 @@ function renderParamGroups() {
   });
 }
 
-async function refreshParamPresets() {
+async function refreshParamPresets(selected) {
   const names = await api("/api/params/presets");
   const select = document.getElementById("params-preset");
-  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
+  select.innerHTML = "";
   names.forEach((n) => select.appendChild(el("option", { value: n, text: n })));
+  if (selected && names.includes(selected)) select.value = selected;
 }
 
 document.getElementById("params-load").addEventListener("click", async () => {
   const name = document.getElementById("params-preset").value;
+  if (!name) return;
   try {
-    if (name) {
-      paramValues = await api("/api/params/presets/" + encodeURIComponent(name));
-      setStatus("params-status", "Loaded preset " + name + ".", true);
-    } else {
-      const data = await api("/api/params");
-      paramValues = data.values;
-      setStatus("params-status", "Loaded current params.yaml.", true);
-    }
+    paramValues = await api("/api/params/presets/" + encodeURIComponent(name));
+    currentParamsPreset = name;
+    document.getElementById("params-preset-name").value = name;
     renderParamGroups();
+    setStatus("params-status", "Loaded preset " + name + ".", true);
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
 });
+
+async function saveParamPreset(name) {
+  await api("/api/params/presets/" + encodeURIComponent(name), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(paramValues),
+  });
+}
 
 document.getElementById("params-save-preset").addEventListener("click", async () => {
   const name = document.getElementById("params-preset-name").value.trim();
@@ -422,30 +446,10 @@ document.getElementById("params-save-preset").addEventListener("click", async ()
     return;
   }
   try {
-    await api("/api/params/presets/" + encodeURIComponent(name), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(paramValues),
-    });
-    await refreshParamPresets();
+    await saveParamPreset(name);
+    currentParamsPreset = name;
+    await refreshParamPresets(name);
     setStatus("params-status", "Saved preset " + name + ".", true);
-  } catch (e) {
-    setStatus("params-status", e.message, false);
-  }
-});
-
-async function applyParams() {
-  await api("/api/params", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(paramValues),
-  });
-}
-
-document.getElementById("params-apply").addEventListener("click", async () => {
-  try {
-    await applyParams();
-    setStatus("params-status", "Applied to params.yaml.", true);
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
@@ -457,14 +461,20 @@ document.getElementById("params-apply").addEventListener("click", async () => {
 
 document.getElementById("continue-setup").addEventListener("click", async () => {
   const filename = document.getElementById("layout-filename").value.trim() || "uwb_layout_gui.yaml";
+  const presetName = document.getElementById("params-preset-name").value.trim() || currentParamsPreset;
+  if (!presetName) {
+    setStatus("continue-status", "Pick or save a plugin-parameter preset first.", false);
+    return;
+  }
   setStatus("continue-status", "Saving...");
   try {
     await saveLayout(filename);
-    await applyParams();
+    await saveParamPreset(presetName);
+    currentParamsPreset = presetName;
     await api("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout_file: filename }),
+      body: JSON.stringify({ layout_file: filename, params_preset: presetName }),
     });
     setStatus("continue-status", "Done -- continuing setup in your terminal. You can close this tab.", true);
     document.getElementById("continue-setup").disabled = true;
@@ -483,11 +493,13 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
     refreshWorlds(),
     refreshTrajectories(),
     refreshVehicleTypes(),
-    refreshParamPresets(),
   ]);
   renderVehicles();
   const data = await api("/api/params");
   paramGroups = data.groups;
   paramValues = data.values;
+  currentParamsPreset = data.preset || null;
+  await refreshParamPresets(currentParamsPreset);
+  if (currentParamsPreset) document.getElementById("params-preset-name").value = currentParamsPreset;
   renderParamGroups();
 })();

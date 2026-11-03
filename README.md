@@ -127,6 +127,28 @@ The plugin accepts the following parameters. Rather than editing them directly i
 | `los_stddev_end_distance_m` | LOS distance where the stddev reaches its maximum | `75.0` |
 | `nlos_dropout_thickness_extra_weight` | Extra thickness importance for dropout relative to the fixed distance baseline (`0 = equal`, `1 = twice as influential`) | `0.50` |
 | `nlos_stddev_thickness_extra_weight` | Extra thickness importance for stddev relative to the fixed distance baseline (`0 = equal`, `1 = twice as influential`) | `0.50` |
+| `uwb_mode` | Ranging mode: `twr` or `tdoa` (see below) | `twr` |
+| `tdoa_topic` | Base topic for simulated TDOA values (tdoa mode only) | `/uwb_gz_simulator/tdoa` |
+| `tdoa_ground_truth_topic` | Base topic for ground-truth TDOA values (tdoa mode only) | `/uwb_gz_simulator/tdoa_ground_truth` |
+| `enable_material_attenuation` | Enables per-obstacle material attenuation (see below) | `false` |
+| `material_attenuation_default` | Multiplier for obstacles without a recognized material tag | `1.0` |
+| `material_attenuation_metal` | Multiplier for obstacles tagged `metal` | `1.0` |
+| `material_attenuation_wood` | Multiplier for obstacles tagged `wood` | `0.08` |
+| `material_attenuation_cardboard` | Multiplier for obstacles tagged `cardboard` | `0.03` |
+| `material_attenuation_plastic` | Multiplier for obstacles tagged `plastic` | `0.15` |
+| `material_attenuation_foam` | Multiplier for obstacles tagged `foam` | `0.02` |
+
+### Ranging mode: TWR vs. TDOA
+
+By default (`uwb_mode: twr`) the plugin simulates two-way ranging: one range per anchor-tag pair, published on `topic`/`ground_truth_topic` and (via the offboard nodes) re-packaged into `eliko_messages/DistancesList` -- the same format the real Eliko hardware driver uses, so downstream consumers can't tell the difference between live hardware, simulated TWR, and (with `uwb_mode: tdoa`) simulated TDOA.
+
+Set `uwb_mode: tdoa` to instead simulate time-difference-of-arrival: one differential measurement per anchor-pair-relative-to-tag, matching real TDOA infrastructure like Bitcraze's Loco Positioning System (and the [UTIL dataset](https://utiasdsl.github.io/util-uwb-dataset/) used to calibrate `presets/util_identification.yaml`). The anchor with the lowest numeric id is the reference anchor; for every other anchor, the plugin publishes `d = ‖tag-anchor‖ - ‖tag-anchor_ref‖` (ground truth, per Zhao et al. 2023's TDOA definition) on topics named `a<ref_id>a<other_id>t<tag_id>` under `tdoa_topic`/`tdoa_ground_truth_topic` -- a 3-component name, unlike TWR's 2-component `a<id>t<id>`, to make clear it's a differential, not a range. Noise and dropout reuse the exact same distance/thickness curves as TWR (TDOA noise variance = the sum of the two legs' variances; dropout = either leg failing) -- switching modes doesn't need separate calibration. This mode has no `eliko_messages` equivalent (that format is specific to real TWR hardware), so there's no ROS 2 offboard-node consumption wired up for it yet -- it publishes on its own GZ topics only.
+
+### Material-aware NLOS attenuation
+
+By default, every obstacle in the world degrades a measurement the same way, purely by how much of the anchor-tag ray its geometry blocks (`los_max_thickness_m`/`soft_nlos_max_thickness_m`/`blackout_thickness_m` above) -- a cardboard box and a steel one of the same size are treated identically, which isn't realistic (UWB signals pass through cardboard far more easily than metal).
+
+Set `enable_material_attenuation: true` to scale each obstacle's contribution by a material-specific multiplier before it reaches that thickness curve, so a thin metal obstacle can matter as much as a thick wooden one. Tag an obstacle by giving its link or model name a `__material_<name>` suffix, e.g. a wall model named `wall_1__material_metal` -- the same naming-convention style this plugin already uses for `uwb_tag_<id>`/`uwb_anchor_<id>`, rather than a custom SDF element. Obstacles without a recognized suffix fall back to `material_attenuation_default`. The five materials above (and their default multipliers) reflect the *qualitative* ordering seen in the UTIL dataset's NLOS obstacle tests -- cardboard/foam/wood were close to indistinguishable from LOS, metal was severe -- not precisely back-solved coefficients, since UTIL doesn't report the real test obstacles' physical thickness; treat them as a reasonable starting point to tune further, not an exact calibration.
 
 
 ## Quick start: automated setup
@@ -408,6 +430,18 @@ The parameter values inside the block come from `uwb_gazebo_plugin/params.yaml` 
 
   <nlos_dropout_thickness_extra_weight>0.5</nlos_dropout_thickness_extra_weight>
   <nlos_stddev_thickness_extra_weight>0.5</nlos_stddev_thickness_extra_weight>
+
+  <uwb_mode>twr</uwb_mode>
+  <tdoa_topic>/uwb_gz_simulator/tdoa</tdoa_topic>
+  <tdoa_ground_truth_topic>/uwb_gz_simulator/tdoa_ground_truth</tdoa_ground_truth_topic>
+
+  <enable_material_attenuation>false</enable_material_attenuation>
+  <material_attenuation_default>1.0</material_attenuation_default>
+  <material_attenuation_metal>1.0</material_attenuation_metal>
+  <material_attenuation_wood>0.08</material_attenuation_wood>
+  <material_attenuation_cardboard>0.03</material_attenuation_cardboard>
+  <material_attenuation_plastic>0.15</material_attenuation_plastic>
+  <material_attenuation_foam>0.02</material_attenuation_foam>
 </plugin>
 ```
 

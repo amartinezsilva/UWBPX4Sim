@@ -1,0 +1,112 @@
+# UWBGazeboSystem plugin parameters -- calibrated from the UTIL dataset
+# (Zhao et al., "UTIL: An Ultra-Wideband Time-Difference-of-Arrival Indoor
+# Localization Dataset", IJRR 2023 -- https://utiasdsl.github.io/util-uwb-dataset/),
+# specifically its identification-dataset (Decawave DWM1000, Bitcraze LPS).
+#
+# IMPORTANT CAVEAT: UTIL is a TDOA dataset -- it reports d12 = ||p-a2|| -
+# ||p-a1|| (already in meters, per the paper's Eq. 1), not a direct
+# single-anchor-tag range. This plugin currently only models single-link
+# TWR-style ranges. The noise values below are derived from the TDOA error
+# by assuming the two underlying links' errors are independent and
+# identically distributed (Var(TDOA) = 2*sigma_link^2, so
+# sigma_link = std(TDOA error) / sqrt(2)) -- a reasonable but approximate
+# stand-in, not a direct per-link measurement. Treat this preset as "in the
+# right ballpark for real DW1000 hardware", not an exact calibration.
+#
+# What's real-data-derived vs. carried over from the compiled-in defaults
+# is called out below. See tools/ for the analysis (not yet committed --
+# ask if you want the calibration script added to the repo).
+
+# Base GZ topics for simulated / ground-truth ranges.
+topic: /uwb_gz_simulator/distances
+ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
+
+# Additive Gaussian noise mean.
+# UTIL's dedicated LOS baseline trial (nlos/los-data, n=2723) measured a
+# mean error of +0.91cm -- negligible, left at 0.0.
+gaussian_noise_mean_cm: 0.0
+
+# Persistent per-pair bias.
+# UTIL's 12 independent LOS distance-test setups (dT1-dT12, same hardware
+# repositioned each time) show a per-setup mean error scattering with
+# mean -2.0cm, std 5.6cm. A +-2 sigma range around that gives roughly
+# [-13, +9]cm -- much tighter than the compiled-in [-27, +20]cm, which
+# looks like a conservative worst-case guess rather than a measured range.
+apply_pair_bias: true
+bias_min_cm: -13.0
+bias_max_cm: 9.0
+
+# NLOS-aware degradation.
+enable_nlos_dropout: true
+nlos_endpoint_margin_m: 0.02  # carried over (unvalidated by this dataset)
+
+# LOS distance-based dropout curve.
+# UTIL's identification dataset only covers 0.5-6.5m, well short of
+# where this plugin's compiled-in curve assumes dropout starts (10m) --
+# carried over unchanged; not contradicted, just not validated here.
+los_dropout_start_distance_m: 10.0
+los_dropout_end_distance_m: 70.0
+los_hard_dropout_distance_m: 75.0
+
+# Blocked-thickness thresholds.
+# UTIL doesn't report obstacle physical thickness (the paper's Table 2
+# /Fig. 7 name materials, not dimensions), and these thresholds are in the
+# *simulated world's own geometry* units anyway -- a different axis from
+# "which real material". Carried over unchanged. See the qualitative NLOS
+# material finding below for how to choose Gazebo obstacle materials that
+# map onto this curve sensibly.
+los_max_thickness_m: 0.10
+soft_nlos_max_thickness_m: 0.50
+blackout_thickness_m: 1.0
+hard_nlos_gap_ratio: 0.75  # carried over from the existing tuned setup
+
+# Dropout probability bounds.
+# Not recalibrated: would need a timestamp-gap analysis of the raw data
+# (sample counts alone don't reveal dropped readings) that hasn't been
+# done yet. Carried over unchanged.
+min_dropout_probability: 0.02
+max_dropout_probability: 0.90
+
+# Noise standard-deviation curve.
+# min_noise_stddev_cm: UTIL's implied single-link noise across the full
+# 0.5-6.5m sweep is 3.35-4.11cm with essentially no distance trend yet
+# (corr(distance, std) = -0.04) -- the compiled-in 12.0cm floor is ~3x
+# too high versus this real DW1000/LPS hardware at short range.
+min_noise_stddev_cm: 4.0
+# max_noise_stddev_cm, los_stddev_start/end_distance_m: UTIL's 6.5m max
+# range never reaches the compiled-in curve's assumed growth zone
+# (15-75m), so the *shape* of the long-range tail is still unvalidated by
+# this dataset -- carried over unchanged. (UTIL's NLOS tests hint the
+# real severe-degradation ceiling may be much higher than 50cm -- see the
+# material note below -- but that's NLOS-driven, not distance-driven, so
+# it isn't a direct substitute for calibrating this curve's far end.)
+max_noise_stddev_cm: 50.0
+los_stddev_start_distance_m: 15.0
+los_stddev_end_distance_m: 75.0
+
+# Extra weight given to blocked thickness vs. distance.
+nlos_dropout_thickness_extra_weight: 0.50  # carried over
+nlos_stddev_thickness_extra_weight: 0.50   # carried over
+
+# --- Qualitative NLOS material finding (not an encodable param yet) ---
+# UTIL's anAn/anTag NLOS material tests (cardboard, foam, wood, plastic,
+# metal) show materials do NOT degrade the signal uniformly, which this
+# plugin's single generic thickness curve can't distinguish:
+#   - cardboard, foam, wood: std stays ~5cm, essentially indistinguishable
+#     from LOS. Negligible degradation.
+#   - metal (anchor-to-tag link): severe -- mean bias -34cm, std 31cm,
+#     p95 |error| 46cm. Matches "hard NLOS" / near-blackout behavior.
+#   - some setups (plastic-anAn, wooden-cabinet-anTag) show wide,
+#     outlier-heavy scatter (std 94-131cm) with most samples still close
+#     to truth (p95 |error| only 10-18cm) -- looks like occasional large
+#     misses layered on an otherwise-fine signal, closer in character to
+#     this plugin's *dropout* mechanism than to widened Gaussian noise.
+#   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
+#     with tight scatter (-15.8cm bias, only 4.9cm std) -- a mode this
+#     plugin can't currently produce at all, since apply_pair_bias draws
+#     one fixed value at pair-creation time, never conditioned on
+#     real-time LOS/NLOS state.
+# When placing NLOS obstacles in a Gazebo world to exercise this preset,
+# treat cardboard/foam/wood obstacles as near-LOS and metal obstacles as
+# driving straight toward blackout_thickness_m, rather than assuming a
+# uniform "more material = more degraded" relationship.

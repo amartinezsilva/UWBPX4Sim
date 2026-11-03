@@ -3,12 +3,15 @@
 
 A small Flask app, launched by setup_simulator.sh as one step in its own
 pipeline (not a standalone service): it lets the user build/edit a layout
-YAML and tune the plugin's params.yaml in a browser, then hands control
-back to setup_simulator.sh via POST /api/continue, which writes the chosen
-settings to .gui_selection and shuts this process down. There is
-deliberately no database, no build step, no JS framework -- just Flask +
-PyYAML (both already project dependencies) serving a static, vanilla-JS
-page, kept intentionally small so it costs the image as little as possible.
+YAML and tune the plugin's parameters (picking/saving a named preset under
+uwb_gazebo_plugin/presets/ -- there's no single standalone params.yaml;
+every preset is an equal, named file there, same as layouts under config/)
+in a browser, then hands control back to setup_simulator.sh via POST
+/api/continue, which writes the chosen settings to .gui_selection and
+shuts this process down. There is deliberately no database, no build step,
+no JS framework -- just Flask + PyYAML (both already project dependencies)
+serving a static, vanilla-JS page, kept intentionally small so it costs the
+image as little as possible.
 """
 
 from __future__ import annotations
@@ -119,15 +122,20 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
     config_dir = uwb_root / "config"
     worlds_dir = uwb_root / "worlds"
     trajectories_dir = uwb_root / "ROS2" / "px4_sim_offboard" / "trajectories"
-    params_file = uwb_root / "uwb_gazebo_plugin" / "params.yaml"
     presets_dir = uwb_root / "uwb_gazebo_plugin" / "presets"
     presets_dir.mkdir(parents=True, exist_ok=True)
     vehicles_file = uwb_root / "models" / "vehicles.yaml"
+    # No single params.yaml: every plugin-parameter set, including the
+    # "default" one, is a named preset under presets_dir, same as layouts
+    # are all equal named files under config_dir. Preferred when no ?preset
+    # is given and nothing else has been picked yet -- mirrors
+    # setup_simulator.sh's own -y fallback (see select_params_preset there).
+    DEFAULT_PRESET_NAME = "eliko_identification"
 
     # (group label, [(key, default)]) -- defines both the canonical write
-    # order/section comments for params.yaml and the ordered param list the
-    # frontend renders. Keep in sync with uwb_gazebo_plugin/params.yaml and
-    # the "Plugin parameters" table in README.md if either changes.
+    # order/section comments for a rendered preset file and the ordered
+    # param list the frontend renders. Keep in sync with the "Plugin
+    # parameters" table in README.md if either changes.
     PARAM_GROUPS: list[tuple[str, list[tuple[str, Any]]]] = [
         ("Base GZ topics for simulated / ground-truth ranges.", [
             ("topic", "/uwb_gz_simulator/distances"),
@@ -170,16 +178,31 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("nlos_dropout_thickness_extra_weight", 0.50),
             ("nlos_stddev_thickness_extra_weight", 0.50),
         ]),
+        ("Ranging mode.", [
+            ("uwb_mode", "twr"),
+            ("tdoa_topic", "/uwb_gz_simulator/tdoa"),
+            ("tdoa_ground_truth_topic", "/uwb_gz_simulator/tdoa_ground_truth"),
+        ]),
+        ("Material-aware NLOS attenuation.", [
+            ("enable_material_attenuation", False),
+            ("material_attenuation_default", 1.0),
+            ("material_attenuation_metal", 1.0),
+            ("material_attenuation_wood", 0.08),
+            ("material_attenuation_cardboard", 0.03),
+            ("material_attenuation_plastic", 0.15),
+            ("material_attenuation_foam", 0.02),
+        ]),
     ]
     PARAM_DEFAULTS = {k: v for _label, kv in PARAM_GROUPS for k, v in kv}
 
     def render_params_yaml(values: dict[str, Any]) -> str:
         lines = [
-            "# UWBGazeboSystem plugin parameters.",
+            "# UWBGazeboSystem plugin parameters -- a preset.",
             "#",
-            "# Generated/edited via the setup GUI. setup_simulator.sh reads this file",
-            "# and writes its values into the <plugin name=\"custom::UWBGazeboSystem\">",
-            "# block in PX4's server.config on every run.",
+            "# Generated/edited via the setup GUI. setup_simulator.sh reads whichever",
+            "# preset was selected (--params, or the terminal/GUI picker) and writes",
+            "# its values into the <plugin name=\"custom::UWBGazeboSystem\"> block in",
+            "# PX4's server.config on every run.",
             "",
         ]
         for label, kv in PARAM_GROUPS:
@@ -264,27 +287,44 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
 
     # -- plugin params -----------------------------------------------------
 
+    def list_preset_names() -> list[str]:
+        return sorted(p.stem for p in presets_dir.glob("*.yaml") if p.is_file())
+
+    def default_preset_name() -> str | None:
+        """Mirrors setup_simulator.sh's select_params_preset -y fallback:
+        prefer DEFAULT_PRESET_NAME if present, else the first preset found
+        alphabetically, else None if there are no presets at all yet."""
+        names = list_preset_names()
+        if DEFAULT_PRESET_NAME in names:
+            return DEFAULT_PRESET_NAME
+        return names[0] if names else None
+
     @app.get("/api/params")
     def get_params():
+        # ?preset=<name> loads that one explicitly; omitted falls back to
+        # default_preset_name() -- used on first page load, before the user
+        # has picked anything. "preset" in the response is which one (if
+        # any) actually got loaded, so the frontend can initialize its
+        # current-preset state correctly either way.
+        requested = request.args.get("preset")
+        preset_name = requested or default_preset_name()
         values = dict(PARAM_DEFAULTS)
-        if params_file.is_file():
-            with open(params_file) as f:
-                values.update(yaml.safe_load(f) or {})
+        if preset_name:
+            try:
+                path = presets_dir / safe_yaml_name(preset_name)
+            except ValueError as exc:
+                return jsonify({"error": str(exc)}), 400
+            if requested and not path.is_file():
+                return jsonify({"error": f"{requested} not found"}), 404
+            if path.is_file():
+                with open(path) as f:
+                    values.update(yaml.safe_load(f) or {})
         return jsonify({"groups": [{"label": label, "keys": [k for k, _ in kv]} for label, kv in PARAM_GROUPS],
-                        "values": values})
-
-    @app.post("/api/params")
-    def save_params():
-        values = request.get_json(force=True, silent=True) or {}
-        merged = dict(PARAM_DEFAULTS)
-        merged.update(values)
-        params_file.parent.mkdir(parents=True, exist_ok=True)
-        params_file.write_text(render_params_yaml(merged))
-        return jsonify({"saved": True})
+                        "values": values, "preset": preset_name})
 
     @app.get("/api/params/presets")
     def list_param_presets():
-        return jsonify(sorted(p.stem for p in presets_dir.glob("*.yaml") if p.is_file()))
+        return jsonify(list_preset_names())
 
     @app.get("/api/params/presets/<name>")
     def get_param_preset(name: str):
@@ -324,9 +364,18 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         if not layout_file or not (config_dir / layout_file).is_file():
             return jsonify({"error": "Save the layout before continuing."}), 400
 
+        params_preset = body.get("params_preset") or ""
+        try:
+            preset_path = presets_dir / safe_yaml_name(params_preset) if params_preset else None
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        if not preset_path or not preset_path.is_file():
+            return jsonify({"error": "Save/pick a plugin-parameter preset before continuing."}), 400
+
         layout_path = str((config_dir / layout_file).resolve())
         with open(selection_file, "w") as f:
             f.write(f"LAYOUT_FILE={_shell_quote(layout_path)}\n")
+            f.write(f"PARAMS_PRESET={_shell_quote(preset_path.stem)}\n")
 
         def _shutdown():
             os._exit(0)
