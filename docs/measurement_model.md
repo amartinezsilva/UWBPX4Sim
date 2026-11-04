@@ -219,89 +219,73 @@ Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-
 | `enable_nlos_dropout` | `false` | Metal-blocked pairs keep 78-99 % of the unblocked sample rate in UTIL's flights |
 | `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.05, 25 | Fitted on the flights; checked on held-out flights |
 
-Results below compare real and simulated TDOA errors with the Wasserstein-1 distance (W1, in cm). Robust std is 1.4826 times the median absolute deviation.
+#### Summary
 
-#### Static experiments
+Results compare real and simulated TDOA errors with the Wasserstein-1 distance (W1, in cm; lower is better). *Centred* removes each setup's or anchor pair's own offset, leaving the noise shape.
 
-LOS (*centred* = each setup's mean removed):
+| Data | W1 raw | W1 centred |
+| --- | ---: | ---: |
+| Static, LOS | 2.2-5.8 | 0.6-1.2 |
+| Static, obstacle on the tag link | 2.1-9.5 | -- |
+| Flight, LOS | 3.07 | 1.75 |
+| Flight, NLOS | 7.89 | 11.38 |
 
-| Test | W1 raw | W1 centred | Robust std real / sim (centred) | Per-setup mean, real / sim |
-| --- | ---: | ---: | --- | --- |
-| Distance (12 setups) | 2.22 | 0.62 | 4.78 / 5.49 | -2.03 ± 5.63 / 0.14 ± 6.58 |
-| Angle (12 setups) | 5.80 | 1.17 | 4.32 / 5.73 | 5.70 ± 2.32 / 0.36 ± 2.70 |
+The simulation reproduces noise levels, the received-power bias in LOS, and the size of obstacle effects in static data. Flight data is harder: LOS matches well, while NLOS matches in shape but less well in size.
 
-![Static LOS error and spread against distance](images/static_error_vs_distance.png)
+#### Static data
 
-NLOS, 6 placements per material; *shift* = mean error minus the LOS baseline's, for an obstacle on the anchor-tag line (anTag) or the anchor-anchor line (anAn). W1 for the LOS baseline: 0.75 cm.
+In LOS, the noise matches at every distance, at about 5-6 cm. The simulated means also follow the real drift with distance, from about +8 cm at 1 m to about -6 cm at 6.5 m. Individual setups aren't comparable, because the simulation draws random anchor offsets and the real means jump between neighbouring positions for reasons not established.
 
-| Obstacle | anTag shift real / sim | anTag W1 | anAn shift real / sim | anAn W1 |
-| --- | --- | ---: | --- | ---: |
-| Cardboard | +0.5 / -5.2 | 6.12 | +0.7 / -0.1 | 1.64 |
-| Foam | -0.4 / -1.8 | 2.06 | -0.2 / +0.1 | 0.94 |
-| Plastic | -3.5 / -8.5 | 5.42 | -3.5 / -1.4 | 5.28 |
-| Wooden cabinet | -9.4 / -14.6 | 9.46 | -0.1 / -1.0 | 1.34 |
-| Wooden shelf | -16.8 / -16.2 | 3.27 | +0.8 / -2.8 | 3.94 |
-| Metal | -35.2 / -35.3 | 6.88 | +0.6 / -1.3 | 3.57 |
+![Static LOS spread against distance](images/static_spread_vs_distance.png)
+
+With an obstacle on the anchor-tag line (*anTag* in the figure), the simulation reproduces how much each material shifts the error, relative to LOS (cm):
+
+| Obstacle | Shift, real / sim | W1 |
+| --- | --- | ---: |
+| Cardboard | +0.5 / -5.2 | 6.12 |
+| Foam | -0.4 / -1.8 | 2.06 |
+| Plastic | -3.5 / -8.5 | 5.42 |
+| Wooden cabinet | -9.4 / -14.6 | 9.46 |
+| Wooden shelf | -16.8 / -16.2 | 3.27 |
+| Metal | -35.2 / -35.3 | 6.88 |
 
 ![Static NLOS shift by material](images/static_material_shift.png)
 
-Most of the real spread behind an obstacle is between placements, not between samples. Within one placement the robust std is 7.1 cm behind metal and 4.6-6.1 cm behind wood, against 4.9 cm in LOS. Between placements, the median shift varies by 14.9 cm for metal and 7.3 cm for the wooden cabinet, whose obstacle loss hardly changes. The wooden shelf's 13.7 cm comes mostly from its chord length, which the model reproduces.
+- **Heavier obstacles shift the error more**, in reality and in the simulation. Light materials are over-predicted by a few cm.
+- **Obstacle effects vary with placement more than from sample to sample.** Moving the same metal obstacle changes the real shift by about 15 cm, while the spread at any one placement stays near 7 cm, against 5 cm in LOS. The simulated shift varies less between placements.
+- **An obstacle between the anchors barely matters.** The real error stays within 1 cm of LOS, except for plastic at 3.5 cm. The simulation doesn't model this link.
 
-#### LOS flights (constellations 1-3, trials 1-3)
+#### Flight data
 
-| | real | simulated |
-| --- | ---: | ---: |
-| Robust std, each pair's median removed | 7.88 cm | 6.70 cm |
-| Spread of per-pair median errors | 7.49 cm | 3.50 cm |
-| Bias slope $`k`$, pooled | 0.77 cm/dB | 0.94 cm/dB |
+Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each path with a median tracking error of 3-7 cm. Anchors were carried by `static: true` robots at their surveyed positions. About 0.7 % of the real samples are corrupted, with errors of up to 120 m, and were excluded. Repeating flights with the same seed moves W1 by about 0.3 cm.
 
-W1 is 3.07 cm raw and 1.75 cm with each pair's median removed (5.20 and 3.78 cm without the moving-tag outliers). By constellation:
+**LOS.** The noise shape and the received-power bias both carry over from the static data.
 
-| Constellation | W1, medians removed | Raw robust std, real / sim |
-| --- | ---: | --- |
-| 1 | 1.1-1.6 cm | 10.9 / 7.5 cm |
-| 2 | 1.0-1.4 cm | 9.7 / 8.0 cm |
-| 3 | 6.7-7.4 cm | 14.2 / 7.7 cm |
+![LOS flights: noise shape and received-power bias](images/flights_los.png)
 
-The outlier values were fitted on these flights, so they were also checked on trial 4 of each constellation, which played no part in the fit. W1 raw / with medians removed, in cm:
+*In both flight figures, the "pair mean" is the median error of an anchor pair; slope points use samples within 30 cm of it.*
 
-| Held-out flight | Without outliers | With outliers |
+- **The received-power bias holds:** 0.77 cm/dB real against 0.94 simulated.
+- **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving-tag term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
+- **Some anchors are much noisier than others in flight.** The cause isn't known, and the simulation treats all anchors alike, so its noise is too low for the worst ones.
+- **Per-anchor offsets are larger in flight data:** about 4.5 cm against 2.1 cm simulated. Widening them fits flights better but worsens the static fit, so the static value was kept.
+
+**NLOS.** With one metal and three wooden boxes:
+
+| Link | Robust std, real / sim | Outliers, real / sim |
 | --- | --- | --- |
-| Constellation 1, trial 4 | 4.29 / 2.06 | 2.81 / 1.36 |
-| Constellation 2, trial 4 | 3.00 / 1.66 | 1.75 / 0.93 |
-| Constellation 3, trial 4 | 9.49 / 9.07 | 7.40 / 7.20 |
-
-![LOS flights: noise shape, per-pair error, received-power bias](images/flights_los.png)
-
-*In this figure and the next, the error's "pair mean" is the pair median; slope points use samples within 30 cm of it.*
-
-- **The noise shape and the power bias transfer to flight.** Per flight, the slope averages 0.82 ± 0.21 cm/dB, consistent with the static fit.
-- **Moving tags have outliers that static ones don't.** More than 30 cm from the pair's median: 0.0 % in static LOS, about 1 % in constellations 1-2 and 10 % in constellation 3. The moving-tag term gives a uniform 3 %, which improves every group but overshoots the first and undershoots the second.
-- **Per-anchor offsets are larger than the preset's.** Over 8 radios the real spread is about 4.5 cm per anchor, against 2.1 cm simulated. Widening the preset's range fits the flights better but makes the static fit worse, and no value in between avoids it (this comparison predates the outlier term):
-
-![W1 against the offset range for flights and static tests](images/offset_tradeoff.png)
-
-- **Constellation 3 remains the worst LOS case, and its errors are concentrated in two anchors.** Anchors 6 and 3 read more than 30 cm long in 26 % and 15 % of their samples, the other six in 1-4 %. These errors fade within about 0.25 m of tag travel and mostly don't repeat at the same place between flights, so they don't look like fixed reflections. The cause isn't known, and a per-anchor term was left out for simplicity.
-- **About 0.7 % of the real samples are corrupted**: their TDOA exceeds the anchor baseline by up to 120 m. They were excluded from the comparison.
-
-#### NLOS flights (constellation 4, trial 4: one metal and three wooden boxes)
-
-| Pair type | Robust std real / sim | Outliers real / sim | Rate vs unblocked, real / sim |
-| --- | --- | --- | --- |
-| Unblocked | 13.3 / 7.3 cm | 10.4 / 3.0 % | |
-| Wood | 12.2 / 6.7 cm | 8.6 / 2.9 % | 1.11-1.15 / 1.01 |
-| Metal | 34.7 / 29.3 cm | 41.9 / 27.8 % | 0.78-0.99 / 1.00 |
-
-Outliers are samples more than 30 cm from their pair's median, with the three flights pooled per pair. W1 is 7.89 cm raw and 11.38 cm with each pair's median removed (8.58 and 13.17 cm without the moving-tag outliers). Flights aren't bit-reproducible even with the same seed: repeating this set without changes moved W1 by about 0.3 cm.
+| Unblocked | 13.3 / 7.3 cm | 10.4 / 3.0 % |
+| Wood | 12.2 / 6.7 cm | 8.6 / 2.9 % |
+| Metal | 34.7 / 29.3 cm | 41.9 / 27.8 % |
 
 ![NLOS flights with the final calibration](images/flights_nlos.png)
 
-- **Metal matches in sign, sample rate and most of the scatter, but not in size.** The blocked leg reads 28 cm long in reality and 58 cm in the simulation. The static test matches because its total loss is lower, and noise grows steeply with loss. Taking the detour loss out of the noise curve brings the leg to 37 cm, but it removes the scatter too (11.5 cm against the real 34.7) and worsens W1 to 13.3 cm, so it was rejected.
-- **Wood adds no measurable scatter**, in reality or in the simulation. It does add bias, roughly as modelled.
-- **Constellation 4 is noisier than the simulation even on unblocked pairs**, like constellation 3, despite the outlier term.
-- **Box positions weren't surveyed in UTIL's flights.** They were placed 0.5 m in front of each anchor, so the simulated metal effect also depends on that assumption.
-
-Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each path with a median tracking error of 3-7 cm. Anchors were carried by `static: true` robots at their surveyed positions.
+- **Metal is right in sign and most of its scatter, but too large.** A blocked leg reads 28 cm long in reality and 58 cm in the simulation, because simulated noise grows steeply with total loss. Reducing that effect also removed the scatter and worsened the overall fit, so it was rejected.
+- **Obstacles don't stop measurements.** Blocked links keep 78-99 % of their sample rate, as the simulation does.
+- **Wood adds bias but no measurable scatter**, in reality and in the simulation.
+- **The received-power bias disappears in this data:** 0.04 cm/dB real against 0.98 simulated. Blocked legs lose it, because their error no longer follows distance, and the simulation still applies it. Part of the loss also appears without these obstacles, for reasons not known.
+- **Overall noise is about twice the simulation's**, even on unblocked links.
+- **Obstacle positions are approximate.** UTIL didn't survey them, so the simulated metal effect also depends on where they were assumed to be.
 
 ## References
 
