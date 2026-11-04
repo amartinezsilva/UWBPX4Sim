@@ -49,8 +49,12 @@ create_window_with_panes() {
   local pane_count="$2"
   local pane_idx
 
+  # Re-tile after every split: splitting the active pane repeatedly halves
+  # it each time, so with many vehicles tmux runs out of room ("no space
+  # for new pane") before a single tiling at the end would help.
   for ((pane_idx = 1; pane_idx < pane_count; pane_idx++)); do
     tmux split-window -t "$target"
+    tmux select-layout -t "$target" tiled
   done
 
   tmux select-layout -t "$target" tiled
@@ -86,13 +90,27 @@ Options:
   (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/demo_nlos.yaml)
   (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: the
                        layout's own 'world:' field if it names one installed there, else "default")
+  --no-qgc             Don't require or start QGroundControl. PX4 then needs NAV_DLL_ACT=0 to
+                       arm without a ground station, which this sets (as a runtime default,
+                       not saved) on every instance once it has booted.
+  --headless           Run Gazebo without its GUI (sets HEADLESS=1 for PX4's gz launcher).
+  --detach             Don't attach to the tmux session, and leave the simulation running when
+                       this script exits; stop it with 'tmux kill-session -t \$SESSION'. For
+                       unattended runs.
   -h, --help           Show this help message.
 EOF2
 }
 
+USE_QGC=1
+HEADLESS_GZ=0
+DETACH=0
+
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --no-qgc) USE_QGC=0 ;;
+      --headless) HEADLESS_GZ=1 ;;
+      --detach) DETACH=1 ;;
       -h|--help)
         print_usage
         exit 0
@@ -150,8 +168,8 @@ build_ros_shell_command() {
 QGC_PATH="$(find_qgc || true)"
 parse_args "$@"
 
-if [[ -z "$QGC_PATH" ]]; then
-  echo "[ERROR] QGroundControl AppImage not found. Set QGC_PATH or place it in ~/Desktop or ~/Downloads." >&2
+if (( USE_QGC )) && [[ -z "$QGC_PATH" ]]; then
+  echo "[ERROR] QGroundControl AppImage not found. Set QGC_PATH or place it in ~/Desktop or ~/Downloads (or pass --no-qgc)." >&2
   exit 1
 fi
 
@@ -237,11 +255,21 @@ graceful_shutdown() {
 
     echo "[CLEANUP] Killing simulators…"
     killall -9 gzserver gzclient ruby MicroXRCEAgent px4 2>/dev/null || true
+    # killall isn't installed everywhere (e.g. this repo's Docker image), and
+    # without it the Gazebo server ("gz sim", a ruby process) survives and the
+    # next launch attaches to its stale world. pkill covers that case.
+    pkill -9 -f "gz sim" 2>/dev/null || true
+    pkill -9 -x px4 2>/dev/null || true
+    pkill -9 -x MicroXRCEAgent 2>/dev/null || true
     tmux kill-session -t "$SESSION" 2>/dev/null || true
   fi
 }
 
-trap graceful_shutdown EXIT INT TERM
+# Detached runs leave the session up when this script exits; the caller
+# stops it (graceful_shutdown would otherwise kill it straight away).
+if (( ! DETACH )); then
+  trap graceful_shutdown EXIT INT TERM
+fi
 
 tmux kill-session -t "$SESSION" 2>/dev/null || true
 
@@ -249,13 +277,41 @@ read -r TMUX_COLS TMUX_LINES < <(get_tmux_size)
 tmux new-session -d -x "$TMUX_COLS" -y "$TMUX_LINES" -s "$SESSION" -n tools
 create_window_with_panes "$SESSION:0" 2
 
-tmux send-keys -t "$SESSION:0.0" "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
+if (( USE_QGC )); then
+  tmux send-keys -t "$SESSION:0.0" "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
+fi
 tmux send-keys -t "$SESSION:0.1" "MicroXRCEAgent udp4 -p 8888" C-m
+
+HEADLESS_ENV=""
+if (( HEADLESS_GZ )); then
+  HEADLESS_ENV="HEADLESS=1 "
+fi
+
+# Without a ground station, PX4 refuses to arm while NAV_DLL_ACT > 0 ("No
+# connection to the GCS"; commander's rcAndDataLinkCheck.cpp). A
+# PX4_PARAM_NAV_DLL_ACT=0 env override doesn't work: rcS applies it before the
+# airframe (4001_gz_x500 runs `param set-default NAV_DLL_ACT 2`), and since 0
+# equals the firmware default nothing is stored, so the airframe's 2 wins.
+# Instead, once each instance has finished booting (its uXRCE-DDS client,
+# started at the end of rcS, answers), lower the default at runtime. Defaults
+# aren't saved to parameters.bson, so later runs with QGC are unaffected.
+nav_dll_cmd() {
+  local px4_bin_dir
+  px4_bin_dir="$(dirname "$PX4_BIN")"
+  local cmd="echo '[INFO] QGroundControl disabled (--no-qgc): setting NAV_DLL_ACT=0 on each PX4 instance once booted.'"
+  local i
+  for i in "$@"; do
+    cmd+=" && until \"$px4_bin_dir/px4-uxrce_dds_client\" --instance $i status >/dev/null 2>&1; do sleep 1; done"
+    cmd+=" && \"$px4_bin_dir/px4-param\" --instance $i set-default NAV_DLL_ACT 0 >/dev/null && echo '[INFO]   instance $i: NAV_DLL_ACT=0'"
+  done
+  printf '%s' "$cmd"
+}
 
 tmux new-window -t "$SESSION:1" -n px4
 create_window_with_panes "$SESSION:1" "${#SPAWN_SPECS[@]}"
 
 SPAWNED_MODELS=()
+PX4_INSTANCES=()
 vehicle_idx=0
 for spec in "${SPAWN_SPECS[@]}"; do
   IFS=$'\t' read -r vehicle_type vehicle_id model_name autostart instance_index x y z roll pitch yaw <<< "$spec"
@@ -263,16 +319,21 @@ for spec in "${SPAWN_SPECS[@]}"; do
   sleep_delay=$((2 + vehicle_idx * 2))
   pose_csv="${x},${y},${z},${roll},${pitch},${yaw}"
   SPAWNED_MODELS+=("$model_name")
+  PX4_INSTANCES+=("$instance_index")
 
   if (( instance_index == 1 )); then
-    spawn_cmd="sleep $sleep_delay && cd \"$PX4_DIR\" && PX4_GZ_MODEL_POSE='$pose_csv' PX4_SYS_AUTOSTART=$autostart PX4_SIM_MODEL=gz_$model_name PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i $instance_index"
+    spawn_cmd="sleep $sleep_delay && cd \"$PX4_DIR\" && ${HEADLESS_ENV}PX4_GZ_MODEL_POSE='$pose_csv' PX4_SYS_AUTOSTART=$autostart PX4_SIM_MODEL=gz_$model_name PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i $instance_index"
   else
-    spawn_cmd="sleep $sleep_delay && cd \"$PX4_DIR\" && PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='$pose_csv' PX4_SYS_AUTOSTART=$autostart PX4_SIM_MODEL=gz_$model_name PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i $instance_index"
+    spawn_cmd="sleep $sleep_delay && cd \"$PX4_DIR\" && ${HEADLESS_ENV}PX4_GZ_STANDALONE=1 PX4_GZ_MODEL_POSE='$pose_csv' PX4_SYS_AUTOSTART=$autostart PX4_SIM_MODEL=gz_$model_name PX4_GZ_WORLD=${GZ_WORLD} \"$PX4_BIN\" -i $instance_index"
   fi
 
   tmux send-keys -t "$SESSION:1.$pane_index" "$spawn_cmd" C-m
   vehicle_idx=$((vehicle_idx + 1))
 done
+
+if (( ! USE_QGC )); then
+  tmux send-keys -t "$SESSION:0.0" "$(nav_dll_cmd "${PX4_INSTANCES[@]}")" C-m
+fi
 
 tmux new-window -t "$SESSION:2" -n ros2
 create_window_with_panes "$SESSION:2" 3
@@ -282,4 +343,8 @@ tmux send-keys -t "$SESSION:2.1" "$(build_ros_shell_command "sleep 25 && cd \"$R
 spawned_models_str="${SPAWNED_MODELS[*]}"
 tmux send-keys -t "$SESSION:2.2" "echo '[INFO] UWB launcher.' && echo '[INFO] Layout file: $UWB_LAYOUT_FILE' && echo '[INFO] Spawned models: $spawned_models_str' && echo '[INFO] Bridge topics should appear under /uwb_gz_simulator/distances/aItJ and /uwb_gz_simulator/distances_ground_truth/aItJ.' && echo '[INFO] Offboard nodes are configured directly from the layout YAML.'" C-m
 
-tmux attach-session -t "$SESSION"
+if (( DETACH )); then
+  echo "[INFO] Simulation running detached in tmux session '$SESSION' (stop: tmux kill-session -t $SESSION)."
+else
+  tmux attach-session -t "$SESSION"
+fi

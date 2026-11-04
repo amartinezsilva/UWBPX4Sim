@@ -178,13 +178,17 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("enable_material_attenuation", False),
             ("carrier_frequency_ghz", 4.0),
             ("material_metal_detour_loss_db", 20.0),
-            ("material_metal_detour_bias_cm", 35.0),
+            ("material_metal_detour_bias_cm", 0.0),
+            ("enable_dielectric_delay", False),
         ]),
         ("Additive noise mean and persistent bias.", [
             ("gaussian_noise_mean_cm", 0.0),
             ("apply_pair_bias", False),
             ("bias_min_cm", -27.0),
             ("bias_max_cm", 20.0),
+            ("power_bias_cm_per_db", 0.0),
+            ("power_bias_ref_loss_db", 0.0),
+            ("random_seed", 0),
         ]),
     ]
     PARAM_DEFAULTS = {k: v for _label, kv in PARAM_GROUPS for k, v in kv}

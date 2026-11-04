@@ -13,6 +13,8 @@
 #include <gz/common/Console.hh>
 #include <gz/math/AxisAlignedBox.hh>
 #include <gz/msgs/double.pb.h>
+#include <gz/sim/components/Collision.hh>
+#include <gz/sim/components/Geometry.hh>
 #include <gz/sim/components/Model.hh>
 #include <gz/sim/components/Link.hh>
 #include <gz/sim/components/Pose.hh>
@@ -23,7 +25,9 @@
 
 #include <gz/sim/EntityComponentManager.hh>
 #include <gz/math/Pose3.hh>
+#include <sdf/Box.hh>
 #include <sdf/Element.hh>
+#include <sdf/Geometry.hh>
 
 using namespace custom;
 
@@ -196,7 +200,7 @@ constexpr double kPositiveEpsilon = 1e-6;
     double materialLengthM{0.0};       // total tagged-material chord length
     double pathLossDb{0.0};            // L_d = 10 n log10(d)
     double obstacleLossDb{0.0};        // L_obs: walls, materials, bodies
-    double biasCm{0.0};                // beta: excess delay + metal detour
+    double biasCm{0.0};                // beta: excess delay + metal detour + power bias
     bool isNlos{false};
     double dropoutProbability{0.0};
     double noiseStddevCm{0.0};
@@ -244,8 +248,9 @@ void UWBGazeboSystem::ComputeObstacleEffects(
 
     _lossDb += it->second.attenuationDbPerM * lengthM;
     // Excess delay of propagating through a dielectric at c/sqrt(eps_r)
-    // instead of c: beta = l (sqrt(eps_r) - 1).
-    _biasCm += lengthM * (std::sqrt(it->second.permittivity) - 1.0) * 100.0;
+    // instead of c: beta = l (sqrt(eps_r) - 1). Only if enabled.
+    if (this->enableDielectricDelay_)
+      _biasCm += lengthM * (std::sqrt(it->second.permittivity) - 1.0) * 100.0;
   }
 
   // Applied once per link, however many metal obstacles it crosses: the
@@ -330,12 +335,11 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
     std::swap(this->minNoiseStddevCm_, this->maxNoiseStddevCm_);
   }
 
-  const double clampedMinDropout = std::clamp(this->minDropoutProbability_, 0.0, 1.0);
-  if (clampedMinDropout != this->minDropoutProbability_)
+  if (this->minDropoutProbability_ < 0.0 || this->minDropoutProbability_ > 1.0)
   {
+    this->minDropoutProbability_ = std::clamp(this->minDropoutProbability_, 0.0, 1.0);
     gzwarn << "[UWBGazeboSystem] min_dropout_probability out of [0,1]. Clamped to "
-           << clampedMinDropout << ".\n";
-    this->minDropoutProbability_ = clampedMinDropout;
+           << this->minDropoutProbability_ << ".\n";
   }
 
   if (this->dropoutWidthDb_ < 0.01)
@@ -345,12 +349,11 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
   }
 
   // ITU-R P.2040's material coefficients are fitted over 1-100 GHz.
-  const double clampedFrequency = std::clamp(this->carrierFrequencyGhz_, 1.0, 100.0);
-  if (clampedFrequency != this->carrierFrequencyGhz_)
+  if (this->carrierFrequencyGhz_ < 1.0 || this->carrierFrequencyGhz_ > 100.0)
   {
+    this->carrierFrequencyGhz_ = std::clamp(this->carrierFrequencyGhz_, 1.0, 100.0);
     gzwarn << "[UWBGazeboSystem] carrier_frequency_ghz out of ITU-R P.2040's [1,100] GHz. Clamped to "
-           << clampedFrequency << ".\n";
-    this->carrierFrequencyGhz_ = clampedFrequency;
+           << this->carrierFrequencyGhz_ << ".\n";
   }
 
   if (this->topic_.empty())
@@ -406,6 +409,11 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readDouble("bias_max_cm", this->biasMaxCm_);
   readBool("apply_pair_bias", this->applyPairBias_);
 
+  if (_sdf && _sdf->HasElement("random_seed"))
+    this->randomSeed_ = _sdf->Get<unsigned int>("random_seed");
+  if (this->randomSeed_ != 0)
+    this->rng_.seed(this->randomSeed_);
+
   readDouble("path_loss_exponent", this->pathLossExponent_);
   readDouble("max_link_loss_db", this->maxLinkLossDb_);
   readDouble("noise_start_loss_db", this->noiseStartLossDb_);
@@ -420,6 +428,8 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readDouble("nlos_endpoint_margin_m", this->nlosEndpointMarginM_);
   readDouble("nlos_min_loss_db", this->nlosMinLossDb_);
   readDouble("body_shadow_max_loss_db", this->bodyShadowMaxLossDb_);
+  readDouble("power_bias_cm_per_db", this->powerBiasCmPerDb_);
+  readDouble("power_bias_ref_loss_db", this->powerBiasRefLossDb_);
 
   readString("topic", this->topic_);
   readString("ground_truth_topic", this->groundTruthTopic_);
@@ -445,6 +455,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readDouble("carrier_frequency_ghz", this->carrierFrequencyGhz_);
   readDouble("material_metal_detour_loss_db", this->metalDetourLossDb_);
   readDouble("material_metal_detour_bias_cm", this->metalDetourBiasCm_);
+  readBool("enable_dielectric_delay", this->enableDielectricDelay_);
 
   for (const char *removed : kRemovedParameters)
   {
@@ -530,15 +541,19 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         << ", enable_nlos_dropout=" << std::boolalpha << this->enableNlosDropout_
         << ", nlos_min_loss_db=" << this->nlosMinLossDb_
         << ", body_shadow_max_loss_db=" << this->bodyShadowMaxLossDb_
+        << ", power_bias_cm_per_db=" << this->powerBiasCmPerDb_
+        << ", power_bias_ref_loss_db=" << this->powerBiasRefLossDb_
         << ", nlos_endpoint_margin_m=" << this->nlosEndpointMarginM_
         << ", gaussian_mean_cm=" << this->noiseMeanCm_
         << ", apply_pair_bias=" << std::boolalpha << this->applyPairBias_
         << ", bias_cm=[" << this->biasMinCm_ << ", " << this->biasMaxCm_ << "]"
+        << ", random_seed=" << this->randomSeed_
         << ", uwb_mode=" << (this->uwbMode_ == UwbMode::Tdoa ? "tdoa" : "twr")
         << ", topic=" << this->topic_
         << ", ground_truth_topic=" << this->groundTruthTopic_
         << ", enable_material_attenuation=" << std::boolalpha << this->enableMaterialAttenuation_
         << ", carrier_frequency_ghz=" << this->carrierFrequencyGhz_
+        << ", enable_dielectric_delay=" << std::boolalpha << this->enableDielectricDelay_
         << ", materials={" << materialSummary.str() << "}\n";
 }
 
@@ -560,19 +575,22 @@ gz::math::Pose3d computeWorldPose(const gz::sim::Entity &entity,
   return pose;
 }
 
-bool segmentIntersectsAabb(const gz::math::Vector3d &_start,
-                           const gz::math::Vector3d &_segment,
-                           const gz::math::AxisAlignedBox &_box,
-                           double &_tEnter,
-                           double &_tExit)
+// Slab test of the segment _start + t * _segment, t in [0, 1], against the
+// box [_boxMin, _boxMax] in the same frame.
+bool segmentIntersectsBox(const gz::math::Vector3d &_start,
+                          const gz::math::Vector3d &_segment,
+                          const gz::math::Vector3d &_boxMin,
+                          const gz::math::Vector3d &_boxMax,
+                          double &_tEnter,
+                          double &_tExit)
 {
   constexpr double kParallelEps = 1e-9;
 
   double tMin = 0.0;
   double tMax = 1.0;
 
-  const auto &boxMin = _box.Min();
-  const auto &boxMax = _box.Max();
+  const auto &boxMin = _boxMin;
+  const auto &boxMax = _boxMax;
 
   for (int axis = 0; axis < 3; ++axis)
   {
@@ -601,6 +619,63 @@ bool segmentIntersectsAabb(const gz::math::Vector3d &_start,
 
   _tEnter = tMin;
   _tExit = tMax;
+  return true;
+}
+
+// Parametric intervals [tEnter, tExit] of the segment inside a link's
+// obstacle geometry. Box collisions are intersected exactly in their own
+// (possibly rotated) frame: the segment is transformed into the box frame
+// and slab-tested against +-size/2. If the link has any non-box collision,
+// the whole link falls back to its world axis-aligned bounding box, which
+// over-estimates rotated or non-box shapes. Returns false if the link has
+// neither (no collision geometry and no AABB).
+bool segmentLinkIntervals(const gz::math::Vector3d &_start,
+                          const gz::math::Vector3d &_segment,
+                          const gz::sim::Entity &_linkEntity,
+                          gz::sim::EntityComponentManager &_ecm,
+                          std::vector<std::pair<double, double>> &_intervals)
+{
+  const auto collisions =
+      _ecm.ChildrenByComponents(_linkEntity, gz::sim::components::Collision());
+
+  std::vector<std::pair<double, double>> boxIntervals;
+  bool allBoxes = !collisions.empty();
+  for (const auto &collision : collisions)
+  {
+    const auto geometry = _ecm.Component<gz::sim::components::Geometry>(collision);
+    if (!geometry || geometry->Data().Type() != sdf::GeometryType::BOX ||
+        geometry->Data().BoxShape() == nullptr)
+    {
+      allBoxes = false;
+      break;
+    }
+
+    const gz::math::Pose3d boxPose = computeWorldPose(collision, _ecm);
+    const gz::math::Vector3d half = geometry->Data().BoxShape()->Size() * 0.5;
+    const gz::math::Vector3d localStart =
+        boxPose.Rot().RotateVectorReverse(_start - boxPose.Pos());
+    const gz::math::Vector3d localSegment = boxPose.Rot().RotateVectorReverse(_segment);
+
+    double tEnter = 0.0;
+    double tExit = 0.0;
+    if (segmentIntersectsBox(localStart, localSegment, -half, half, tEnter, tExit))
+      boxIntervals.emplace_back(tEnter, tExit);
+  }
+
+  if (allBoxes)
+  {
+    _intervals.insert(_intervals.end(), boxIntervals.begin(), boxIntervals.end());
+    return true;
+  }
+
+  const auto worldBox = gz::sim::Link(_linkEntity).WorldAxisAlignedBox(_ecm);
+  if (!worldBox.has_value())
+    return false;
+
+  double tEnter = 0.0;
+  double tExit = 0.0;
+  if (segmentIntersectsBox(_start, _segment, worldBox->Min(), worldBox->Max(), tEnter, tExit))
+    _intervals.emplace_back(tEnter, tExit);
   return true;
 }
 
@@ -676,20 +751,8 @@ BlockedPath computeAabbBlockedPath(const gz::math::Vector3d &_start,
     if (linkEntity == _tagLinkEntity || linkEntity == _anchorLinkEntity)
       continue;
 
-    const gz::sim::Link link(linkEntity);
-    const auto worldBox = link.WorldAxisAlignedBox(_ecm);
-    if (!worldBox.has_value())
-      continue;
-
-    double tEnter = 0.0;
-    double tExit = 0.0;
-    if (!segmentIntersectsAabb(_start, segment, *worldBox, tEnter, tExit))
-      continue;
-
-    const double clippedEnter = std::max(tEnter, tMinAllowed);
-    const double clippedExit = std::min(tExit, tMaxAllowed);
-
-    if (clippedExit <= clippedEnter)
+    std::vector<std::pair<double, double>> linkIntervals;
+    if (!segmentLinkIntervals(_start, segment, linkEntity, _ecm, linkIntervals))
       continue;
 
     std::string materialName;
@@ -700,7 +763,13 @@ BlockedPath computeAabbBlockedPath(const gz::math::Vector3d &_start,
         materialName = it->second;
     }
 
-    intervalsByMaterial[materialName].emplace_back(clippedEnter, clippedExit);
+    for (const auto &[tEnter, tExit] : linkIntervals)
+    {
+      const double clippedEnter = std::max(tEnter, tMinAllowed);
+      const double clippedExit = std::min(tExit, tMaxAllowed);
+      if (clippedExit > clippedEnter)
+        intervalsByMaterial[materialName].emplace_back(clippedEnter, clippedExit);
+    }
   }
 
   for (auto &[materialName, intervals] : intervalsByMaterial)
@@ -934,6 +1003,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		link.isNlos = link.obstacleLossDb >= this->nlosMinLossDb_;
 
 		const double totalLossDb = link.pathLossDb + link.obstacleLossDb;
+		link.biasCm += this->powerBiasCmPerDb_ * (totalLossDb - this->powerBiasRefLossDb_);
 		link.noiseStddevCm = this->ComputeNoiseStddevCm(totalLossDb);
 		link.dropoutProbability = this->ComputeDropoutProbability(
 			this->enableNlosDropout_ ? totalLossDb : link.pathLossDb);

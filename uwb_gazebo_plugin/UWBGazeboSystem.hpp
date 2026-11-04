@@ -57,8 +57,8 @@ private:
   /// each material (untagged obstacles count as "generic").
   /// \details Loss is sum_m alpha_m l_m, plus metalDetourLossDb_ once if any
   /// metal is crossed. Bias is the dielectrics' excess delay,
-  /// sum_m l_m (sqrt(eps_m) - 1), plus metalDetourBiasCm_ once if any metal
-  /// is crossed.
+  /// sum_m l_m (sqrt(eps_m) - 1) (only with enableDielectricDelay_), plus
+  /// metalDetourBiasCm_ once if any metal is crossed.
   /// \param[in] materialLengthM Chord length through each material, in meters.
   /// \param[out] lossDb Obstacle loss, in dB.
   /// \param[out] biasCm Deterministic material bias, in centimeters.
@@ -94,6 +94,10 @@ private:
   std::string anchorPrefix_ = "uwb_anchor";
 
   std::default_random_engine rng_;
+  // 0 keeps the engine's fixed default seed (every run draws the same
+  // noise and biases); any other value seeds it, e.g. one seed per
+  // experiment repetition.
+  unsigned int randomSeed_{0};
 
   std::unordered_map<std::string, double> pairBiasCm_;
   std::uniform_real_distribution<double> biasCmDist_{-27.0, 20.0};
@@ -126,6 +130,11 @@ private:
   // Cap on the loss from the vehicles' own bodies (base_link AABBs), which
   // use the generic attenuation rate.
   double bodyShadowMaxLossDb_{10.0};
+  // Received-power ranging bias: a weaker first path is detected later, so
+  // each link reads long by k (L - L0) cm. In TDOA only k is observable
+  // (L0 cancels between the two legs). 0 disables it.
+  double powerBiasCmPerDb_{0.0};
+  double powerBiasRefLossDb_{0.0};
 
   // --- Ranging mode: TWR (default, one range per anchor-tag pair) or TDOA
   // (one differential measurement per anchor-pair-relative-to-tag, matching
@@ -150,9 +159,16 @@ private:
   // Bitcraze LPS).
   double carrierFrequencyGhz_{4.0};
   // Loss and range bias added once to a link crossing any metal: the first
-  // path detours around the conductor instead of going through it.
+  // path detours around the conductor instead of going through it. The
+  // bias defaults to 0: on UTIL's NLOS data, the detour loss's own power
+  // bias and NLOS folding already reproduce metal's shift, and a bias on
+  // top double-counts it.
   double metalDetourLossDb_{20.0};
-  double metalDetourBiasCm_{35.0};
+  double metalDetourBiasCm_{0.0};
+  // Excess delay l (sqrt(eps_r) - 1) of propagating through dielectrics.
+  // Off by default: correct for solid slabs, but UTIL's NLOS objects are
+  // mostly air and it over-predicts their shifts (decision 2.7).
+  bool enableDielectricDelay_{false};
   // Keyed by material name (lowercase, matching the "__material_<name>"
   // suffix), including "generic". Built in Configure() from the .cpp's
   // material table at carrierFrequencyGhz_, each entry overridable through

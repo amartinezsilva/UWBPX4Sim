@@ -102,6 +102,10 @@ class VehicleLayout:
     spawn_pose: SpawnPose
     sensors: List[SensorPlacement]
     offboard: dict[str, Any]
+    # Spawned as a static Gazebo model: no physics, stays exactly at its spawn
+    # pose. Implies no offboard node. Placeholder for fixed anchors until they
+    # can be placed directly in the world instead of on a robot.
+    static: bool = False
 
 
 @dataclass(frozen=True)
@@ -389,6 +393,7 @@ def _parse_vehicle_layouts(
                 spawn_pose=_parse_spawn_pose(raw_vehicle.get("spawn_pose"), f"{entry_name}.spawn_pose"),
                 sensors=sensors,
                 offboard=_to_mapping(raw_vehicle["offboard"], f"{entry_name}.offboard"),
+                static=bool(raw_vehicle.get("static", False)),
             )
         )
 
@@ -727,6 +732,16 @@ def _rewrite_model_config_identity(model_config_path: Path, target_model_name: s
     model_config_path.write_text(updated, encoding="utf-8")
 
 
+def _make_model_static(model_sdf_path: Path) -> None:
+    text = model_sdf_path.read_text(encoding="utf-8")
+    if re.search(r"<static>\s*true\s*</static>", text):
+        return
+    updated, count = re.subn(r"(<model\s+name=[\"'][^\"']+[\"'][^>]*>)", r"\1\n    <static>true</static>", text, count=1)
+    if count != 1:
+        raise RuntimeError(f"Could not mark {model_sdf_path} static")
+    model_sdf_path.write_text(updated, encoding="utf-8")
+
+
 def _extract_plugin_blocks(model_sdf_path: Path) -> list[str]:
     text = model_sdf_path.read_text(encoding="utf-8")
     return re.findall(r"(<plugin\b.*?</plugin>)", text, flags=re.S)
@@ -930,6 +945,7 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "vehicle_command_topic": f"{px4_base}/in/vehicle_command",
         "vehicle_odometry_topic": f"{px4_base}/out/vehicle_odometry",
         "vehicle_local_position_topic": f"{px4_base}/out/vehicle_local_position_v1",
+        "vehicle_status_topic": f"{px4_base}/out/vehicle_status_v1",
         "trajectory_csv_file": params["trajectory_csv_file"],
         "ros_odometry_topic": params["ros_odometry_topic"],
         "ros_gt_topic": params["ros_gt_topic"],
@@ -984,9 +1000,19 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
     return ros_params
 
 
+def offboard_enabled(offboard: Mapping[str, Any]) -> bool:
+    """`offboard: {enabled: false}` spawns the vehicle without an offboard node:
+    PX4 is never armed, so the vehicle stays exactly where it spawned (e.g. a
+    static anchor carrier). An armed rover fed zero-velocity setpoints still
+    turns and creeps under its own controllers."""
+    return bool(offboard.get("enabled", True))
+
+
 def build_offboard_launch_entries(layout: UwbLayout) -> List[Tuple[str, str, dict[str, Any]]]:
     entries: List[Tuple[str, str, dict[str, Any]]] = []
     for assignment in iter_spawn_assignments(layout):
+        if assignment.vehicle.static or not offboard_enabled(assignment.vehicle.offboard):
+            continue
         if assignment.vehicle_type == "uav":
             entries.append(
                 (node_name("uav", assignment.vehicle.id), "uav_offboard_control", build_uav_offboard_params(layout, assignment))
@@ -1097,6 +1123,8 @@ def main() -> None:
             _append_plugin_blocks(
                 model_sdf, _extract_plugin_blocks(px4_models_dir / vehicle_type.plugins_from / "model.sdf")
             )
+        if vehicle.static:
+            _make_model_static(model_sdf)
         generated_model_dirs.append(target_dir)
 
     bridge_targets: List[Path] = []

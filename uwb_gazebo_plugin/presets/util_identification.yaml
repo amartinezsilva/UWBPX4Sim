@@ -35,16 +35,23 @@ noise_end_loss_db: 37.5
 dropout_mid_loss_db: 35.5
 dropout_width_db: 1.4
 
-# Noise floor: UTIL's implied single-link noise across the full 0.5-6.5 m
-# sweep is 3.35-4.11 cm with essentially no distance trend
-# (corr(distance, std) = -0.04). max_noise_stddev_cm carried over.
+# Noise floor: 4.0 cm per leg, from UTIL's implied single-link noise (TDOA
+# std / sqrt(2): 3.35-4.11 cm across 0.5-6.5 m, no distance trend).
+# A robust fit over all 25 LOS recordings gives 3.2 cm, and 3.2 cm improved
+# every LOS group, but it worsened the fit (W1) behind metal and wood, whose
+# real spread the model already under-produces -- so it was reverted. The
+# real errors' heavier-than-Gaussian tails remain unmodelled.
+# max_noise_stddev_cm carried over.
 min_noise_stddev_cm: 4.0
 max_noise_stddev_cm: 50.0
 
 # Dropout floor: not recalibrated -- would need a timestamp-gap analysis of
 # the raw data (sample counts alone don't reveal dropped readings).
 min_dropout_probability: 0.02
-enable_nlos_dropout: true
+# Obstacles add noise and bias but don't drop measurements: in UTIL's flights
+# the metal-blocked pairs keep 78-99 % of the unblocked sample rate, while
+# obstacle dropout left 5-7 %. Static results unchanged.
+enable_nlos_dropout: false
 
 # Obstacles: carried over.
 nlos_endpoint_margin_m: 0.02
@@ -66,25 +73,40 @@ body_shadow_max_loss_db: 10.0
 #     otherwise-fine signal. Not modelled.
 #   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
 #     with tight scatter (-15.8cm bias, only 4.9cm std).
-# Tag obstacles with a "__material_<name>" suffix (e.g. "shelf__material_wood"):
-# the low-loss dielectrics stay near-LOS at short range, metal adds a
-# detour loss and a ~35 cm detour bias (matching the -34 cm above), and a
-# ~0.38 m wooden shelf's excess delay is ~15.6 cm (matching the shelf's
-# shift). TDOA error signs depend on which leg is blocked: NLOS on the
-# reference anchor's leg pulls d_ij negative, on the other anchor's leg
-# positive.
+# Tag obstacles with a "__material_<name>" suffix (e.g. "shelf__material_wood").
+# Reproducing these 36 anTag setups showed the obstacle shifts are explained to 7.4 cm RMS per placement by
+# the power bias and NLOS folding alone (metal: -34.2 cm predicted vs -35.2
+# cm real), while the dielectric delay of objects treated as solid and a
+# metal detour bias on top over-predict them (27.8 cm RMS). Both are
+# therefore off: enable_dielectric_delay false, detour bias 0. These terms
+# were selected on this data, so they still need out-of-sample confirmation.
+# TDOA error signs depend on which leg is blocked: NLOS on the reference
+# anchor's leg pulls d_ij negative, on the other anchor's leg positive.
 enable_material_attenuation: true
 carrier_frequency_ghz: 4.0
 material_metal_detour_loss_db: 20.0
-material_metal_detour_bias_cm: 35.0
+material_metal_detour_bias_cm: 0.0
+enable_dielectric_delay: false
 
-# Mean and persistent bias.
+# Mean, persistent and power-dependent bias -- fitted on the 12 LOS
+# distance-test setups (distT1-distT12: anchor 1 moved from 6.5 m to 1.0 m
+# from the tag) and validated on the 12 angle-test setups.
 # UTIL's dedicated LOS baseline trial (nlos/los-data, n=2723) measured a
-# mean error of +0.91cm -- negligible, left at 0.0. Its 12 independent LOS
-# distance-test setups (dT1-dT12, same hardware repositioned each time)
-# show a per-setup mean error scattering with mean -2.0cm, std 5.6cm; a
-# +-2 sigma range around that gives roughly [-13, +9]cm.
+# mean error of +0.91cm -- negligible, left at 0.0.
 gaussian_noise_mean_cm: 0.0
+# Received-power bias: the per-setup mean TDOA error follows
+# k_P (L_2 - L_1) with k_P = 0.98 +- 0.18 cm/dB (R^2 = 0.75) -- the DW1000
+# reads longer ranges as the received power drops (Decawave APS011, Sec. 3,
+# Table 2; its 64 MHz-PRF curve, LPS's default, gives 0.57-0.98 cm/dB over
+# this range for a net system gain of 0 to -8 dB). APS011's curve saturates, so this linear fit only holds
+# over the fitted 1-6.5 m. Only k_P is observable in TDOA; the reference
+# loss is left at 0 dB (an assumption that only matters in TWR).
+power_bias_cm_per_db: 0.98
+power_bias_ref_loss_db: 0.0
+# Persistent per-anchor offsets: what's left of the per-setup mean error
+# after the power trend scatters by 2.96 cm between setups. The simulated
+# experiment redraws both anchors per setup, so each anchor gets
+# sigma = 2.96/sqrt(2) cm, i.e. uniform on +-3.6 cm.
 apply_pair_bias: true
-bias_min_cm: -13.0
-bias_max_cm: 9.0
+bias_min_cm: -3.6
+bias_max_cm: 3.6

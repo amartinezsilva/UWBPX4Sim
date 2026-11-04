@@ -44,6 +44,7 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
 
 #include <px4_ros_com/frame_transforms.h>
 
@@ -140,6 +141,14 @@ public:
 		this->get_parameter("vehicle_command_topic", vehicle_command_topic_);
 		this->get_parameter("vehicle_odometry_topic", vehicle_odometry_topic_);
 		this->get_parameter("vehicle_local_position_topic", vehicle_local_position_topic_);
+		// Older generated configs have no vehicle_status_topic: derive it from the command topic.
+		std::string vehicle_status_topic_ = vehicle_command_topic_;
+		const std::string cmd_suffix = "/in/vehicle_command";
+		if (vehicle_status_topic_.size() >= cmd_suffix.size() &&
+		    vehicle_status_topic_.compare(vehicle_status_topic_.size() - cmd_suffix.size(), cmd_suffix.size(), cmd_suffix) == 0) {
+			vehicle_status_topic_.replace(vehicle_status_topic_.size() - cmd_suffix.size(), cmd_suffix.size(), "/out/vehicle_status_v1");
+		}
+		this->get_parameter("vehicle_status_topic", vehicle_status_topic_);
 		this->get_parameter("trajectory_csv_file", traj_file_);
 		this->get_parameter("lookahead_distance", lookahead_distance_);
 		this->get_parameter("ros_odometry_topic", ros_odometry_topic_);
@@ -403,6 +412,18 @@ public:
 			ros_odometry_publisher_->publish(odom_msg);
 		});
 
+		vehicle_status_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
+			vehicle_status_topic_, qos_profile,
+			[this](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
+				have_status_ = true;
+				if (!engaged_ &&
+				    msg->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
+				    msg->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
+					engaged_ = true;
+					RCLCPP_INFO(this->get_logger(), "Armed in offboard mode.");
+				}
+			});
+
 		vehicle_local_position_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleLocalPosition>(
 			vehicle_local_position_topic_, qos_profile,
 			[this](const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {
@@ -523,19 +544,27 @@ public:
 
 		auto timer_callback = [this]() -> void {
 
-			if (offboard_setpoint_counter_ == 10) {
-				// Change to Offboard mode after 10 setpoints
+			// Change to Offboard mode and arm after 10 setpoints. Commands sent
+			// before the DDS link to PX4 has matched are dropped, so while
+			// vehicle_status doesn't confirm armed + offboard, resend every second
+			// (never after LAND). Without vehicle_status, send once as before.
+			const auto now = this->get_clock()->now();
+			const bool retry = have_status_ && !engaged_ && !land_sent_ &&
+			                   offboard_setpoint_counter_ >= 10 && (now - start_time_).seconds() >= 1.0;
+			if (offboard_setpoint_counter_ == 10 || retry) {
+				if (retry) {
+					RCLCPP_WARN(this->get_logger(), "Arm/offboard not confirmed by PX4 yet, resending.");
+				}
 				this->publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
 
 				// Arm the vehicle
 				this->arm();
-				start_time_ = this->get_clock()->now();
+				start_time_ = now;
 
 			}
 
-			if (!started_ && offboard_setpoint_counter_ >= 10){
+			if (!started_ && offboard_setpoint_counter_ >= 10 && (engaged_ || !have_status_)){
 				//Wait a bit for the drone to take off
-				auto now = this->get_clock()->now();
 				if ((now - start_time_).seconds() >= 2.0) {
 					started_ = true;
 				}
@@ -577,6 +606,9 @@ private:
 	rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_pub_;
 	rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_subscriber_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_subscriber_;
+	rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_subscriber_;
+	bool have_status_ = false;  // a vehicle_status message has been received
+	bool engaged_ = false;      // PX4 has reported armed + offboard (latched)
 
 	std::atomic<uint64_t> timestamp_;   //!< common synced timestamped
 

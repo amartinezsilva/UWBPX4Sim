@@ -25,11 +25,17 @@ def _layout_file() -> Path:
 
 
 def _uwb_root(layout_file: Path) -> Path:
-    if layout_file.parent.name != "config":
-        raise RuntimeError(
-            f"Expected layout YAML to live under a config/ directory, got: {layout_file}"
-        )
-    return layout_file.parent.parent
+    # Layouts normally live in <repo>/config/. Elsewhere in the repo, the
+    # root is the nearest parent holding the layout tool.
+    if layout_file.parent.name == "config":
+        return layout_file.parent.parent
+    for parent in layout_file.parents:
+        if parent.joinpath(*LAYOUT_TOOL_RELATIVE).exists():
+            return parent
+    raise RuntimeError(
+        f"Layout YAML is neither under a config/ directory nor inside a tree holding "
+        f"{'/'.join(LAYOUT_TOOL_RELATIVE)}: {layout_file}"
+    )
 
 
 def _layout_tool_module(layout_file: Path):

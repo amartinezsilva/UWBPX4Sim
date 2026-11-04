@@ -45,6 +45,10 @@ const PARAM_UI = {
   carrier_frequency_ghz: { type: "slider", min: 3, max: 10, step: 0.1 },
   material_metal_detour_loss_db: { type: "slider", min: 0, max: 60, step: 0.5 },
   material_metal_detour_bias_cm: { type: "slider", min: 0, max: 100, step: 1 },
+  enable_dielectric_delay: { type: "bool" },
+  power_bias_cm_per_db: { type: "number", step: 0.05 },
+  power_bias_ref_loss_db: { type: "number", step: 0.5 },
+  random_seed: { type: "number", step: 1 },
 };
 
 let trajectoryOptions = [];

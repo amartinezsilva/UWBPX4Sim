@@ -55,7 +55,10 @@ body_shadow_max_loss_db: 10.0
 enable_material_attenuation: false
 carrier_frequency_ghz: 4.0
 material_metal_detour_loss_db: 20.0
-material_metal_detour_bias_cm: 35.0
+# Metal detour bias and dielectric delay off, as decided from UTIL's NLOS
+# data.
+material_metal_detour_bias_cm: 0.0
+enable_dielectric_delay: false
 
 # Mean and persistent bias: ~zero in the measured LOS data.
 gaussian_noise_mean_cm: 0.0
