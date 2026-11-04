@@ -56,6 +56,9 @@ p =
 - $`p`$ combines an independent floor $`p_{\min}`$ = `min_dropout_probability` (random packet loss) with a logistic link failure as the budget runs out, centred on $`L_{50}`$ = `dropout_mid_loss_db` with width $`w`$ = `dropout_width_db`. Beyond $`L_{\max}`$ = `max_link_loss_db` the link is closed.
 - With `enable_nlos_dropout: false`, dropout uses $`L_d`$ only (obstacles don't drop measurements); noise still uses the full $`L`$.
 
+## Moving-tag outliers
+
+While a tag moves (more than 1 cm between updates), each of its links independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A still tag is never affected, because UTIL's static recordings have almost no such samples while its flights do. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
 
 ## Deterministic bias
 
@@ -145,7 +148,7 @@ The same wall matters more the farther apart the robots are, since it eats into 
 ## Limitations
 
 - Box collisions are intersected exactly, including rotated ones; any other collision shape (meshes, cylinders, ...) falls back to its link's world-axis-aligned bounding box, which over-estimates the blocked length.
-- One straight ray per link: no multipath, and no diffraction around obstacle edges (the metal detour loss and bias are constants, not computed from geometry).
+- One straight ray per link: no explicit multipath, and no diffraction around obstacle edges (the metal detour loss and bias are constants, not computed from geometry). The moving-tag outliers are a statistical stand-in, the same for every anchor and uncorrelated in time.
 - Overlapping obstacles of *different* materials each count their own chord length.
 - The outlier-heavy behaviour UTIL shows behind some plastic and cabinet obstacles (mostly accurate readings with occasional large misses) isn't modelled.
 - The TDOA reference anchor is fixed (lowest id), and clock synchronisation between anchors isn't simulated.
@@ -165,6 +168,7 @@ The same wall matters more the farther apart the robots are, since it eats into 
 | `min_noise_stddev_cm`, `max_noise_stddev_cm` | $`\sigma_{\min}`$, $`\sigma_{\max}`$ | `12.0`, `50.0` |
 | `noise_start_loss_db`, `noise_end_loss_db` | $`L_{\sigma 0}`$, $`L_{\sigma 1}`$ | `23.5`, `37.5` |
 | `gaussian_noise_mean_cm` | $`\mu`$ | `0.0` |
+| `moving_outlier_probability`, `moving_outlier_mean_cm` | $`p_o`$, $`m_o`$ | `0.0`, `30.0` |
 | **Dropout** | | |
 | `min_dropout_probability` | $`p_{\min}`$ | `0.02` |
 | `dropout_mid_loss_db`, `dropout_width_db` | $`L_{50}`$, $`w`$ | `35.5`, `1.4` |
@@ -213,6 +217,7 @@ Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-
 | `material_metal_detour_loss_db` | 20 | Assumed; reproduces the static metal shift |
 | `material_metal_detour_bias_cm`, `enable_dielectric_delay` | 0, `false` | Both over-predicted the static NLOS shifts |
 | `enable_nlos_dropout` | `false` | Metal-blocked pairs keep 78-99 % of the unblocked sample rate in UTIL's flights |
+| `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.05, 25 | Fitted on the flights; checked on held-out flights |
 
 Results below compare real and simulated TDOA errors with the Wasserstein-1 distance (W1, in cm). Robust std is 1.4826 times the median absolute deviation.
 
@@ -240,49 +245,60 @@ NLOS, 6 placements per material; *shift* = mean error minus the LOS baseline's, 
 
 ![Static NLOS shift by material](images/static_material_shift.png)
 
+Most of the real spread behind an obstacle is between placements, not between samples. Within one placement the robust std is 7.1 cm behind metal and 4.6-6.1 cm behind wood, against 4.9 cm in LOS. Between placements, the median shift varies by 14.9 cm for metal and 7.3 cm for the wooden cabinet, whose obstacle loss hardly changes. The wooden shelf's 13.7 cm comes mostly from its chord length, which the model reproduces.
+
 #### LOS flights (constellations 1-3, trials 1-3)
 
 | | real | simulated |
 | --- | ---: | ---: |
-| Robust std, each pair's median removed | 7.88 cm | 6.10 cm |
-| Spread of per-pair median errors | 7.49 cm | 3.07 cm |
-| Bias slope $`k`$, pooled | 0.77 cm/dB | 0.96 cm/dB |
+| Robust std, each pair's median removed | 7.88 cm | 6.70 cm |
+| Spread of per-pair median errors | 7.49 cm | 3.50 cm |
+| Bias slope $`k`$, pooled | 0.77 cm/dB | 0.94 cm/dB |
 
-W1 is 5.21 cm raw and 3.78 cm with each pair's median removed. By constellation:
+W1 is 3.07 cm raw and 1.75 cm with each pair's median removed (5.20 and 3.78 cm without the moving-tag outliers). By constellation:
 
 | Constellation | W1, medians removed | Raw robust std, real / sim |
 | --- | ---: | --- |
-| 1 | 1.8-2.3 cm | 10.9 / 6.8 cm |
-| 2 | 1.2-2.3 cm | 9.7 / 6.9 cm |
-| 3 | 8.5-9.2 cm | 14.2 / 6.8 cm |
+| 1 | 1.1-1.6 cm | 10.9 / 7.5 cm |
+| 2 | 1.0-1.4 cm | 9.7 / 8.0 cm |
+| 3 | 6.7-7.4 cm | 14.2 / 7.7 cm |
+
+The outlier values were fitted on these flights, so they were also checked on trial 4 of each constellation, which played no part in the fit. W1 raw / with medians removed, in cm:
+
+| Held-out flight | Without outliers | With outliers |
+| --- | --- | --- |
+| Constellation 1, trial 4 | 4.29 / 2.06 | 2.81 / 1.36 |
+| Constellation 2, trial 4 | 3.00 / 1.66 | 1.75 / 0.93 |
+| Constellation 3, trial 4 | 9.49 / 9.07 | 7.40 / 7.20 |
 
 ![LOS flights: noise shape, per-pair error, received-power bias](images/flights_los.png)
 
 *In this figure and the next, the error's "pair mean" is the pair median; slope points use samples within 30 cm of it.*
 
 - **The noise shape and the power bias transfer to flight.** Per flight, the slope averages 0.82 ± 0.21 cm/dB, consistent with the static fit.
-- **Per-anchor offsets are larger than the preset's.** Over 8 radios the real spread is about 4.5 cm per anchor, against 2.1 cm simulated. Widening the preset's range fits the flights better but makes the static fit worse, and no value in between avoids it:
+- **Moving tags have outliers that static ones don't.** More than 30 cm from the pair's median: 0.0 % in static LOS, about 1 % in constellations 1-2 and 10 % in constellation 3. The moving-tag term gives a uniform 3 %, which improves every group but overshoots the first and undershoots the second.
+- **Per-anchor offsets are larger than the preset's.** Over 8 radios the real spread is about 4.5 cm per anchor, against 2.1 cm simulated. Widening the preset's range fits the flights better but makes the static fit worse, and no value in between avoids it (this comparison predates the outlier term):
 
 ![W1 against the offset range for flights and static tests](images/offset_tradeoff.png)
 
-- **Constellation 3's real noise is 2.5 times wider** at nearly the same distances, with fewer samples per pair. Its ceiling anchors are mounted higher, which points to multipath around the mounts, though that isn't measured. The model has no term for it.
+- **Constellation 3 remains the worst LOS case, and its errors are concentrated in two anchors.** Anchors 6 and 3 read more than 30 cm long in 26 % and 15 % of their samples, the other six in 1-4 %. These errors fade within about 0.25 m of tag travel and mostly don't repeat at the same place between flights, so they don't look like fixed reflections. The cause isn't known, and a per-anchor term was left out for simplicity.
 - **About 0.7 % of the real samples are corrupted**: their TDOA exceeds the anchor baseline by up to 120 m. They were excluded from the comparison.
 
 #### NLOS flights (constellation 4, trial 4: one metal and three wooden boxes)
 
 | Pair type | Robust std real / sim | Outliers real / sim | Rate vs unblocked, real / sim |
 | --- | --- | --- | --- |
-| Unblocked | 13.6 / 6.2 cm | 8.7 / 0.0 % | |
-| Wood | 13.2 / 5.5 cm | 7.9 / 0.0 % | 1.11-1.15 / 1.01 |
-| Metal | 36.8 / 28.8 cm | 43.6 / 26.6 % | 0.78-0.99 / 1.00 |
+| Unblocked | 13.3 / 7.3 cm | 10.4 / 3.0 % | |
+| Wood | 12.2 / 6.7 cm | 8.6 / 2.9 % | 1.11-1.15 / 1.01 |
+| Metal | 34.7 / 29.3 cm | 41.9 / 27.8 % | 0.78-0.99 / 1.00 |
 
-Outliers are samples more than 30 cm from their pair's median. W1 is 8.26 cm raw and 13.11 cm with each pair's median removed.
+Outliers are samples more than 30 cm from their pair's median, with the three flights pooled per pair. W1 is 7.89 cm raw and 11.38 cm with each pair's median removed (8.58 and 13.17 cm without the moving-tag outliers). Flights aren't bit-reproducible even with the same seed: repeating this set without changes moved W1 by about 0.3 cm.
 
 ![NLOS flights with the final calibration](images/flights_nlos.png)
 
-- **Metal matches in sign, sample rate and most of the scatter, but not in size.** The blocked leg reads 29.2 cm long in reality and 57.1 cm in the simulation. The static test matches because its total loss is lower, and noise grows steeply with loss.
+- **Metal matches in sign, sample rate and most of the scatter, but not in size.** The blocked leg reads 28 cm long in reality and 58 cm in the simulation. The static test matches because its total loss is lower, and noise grows steeply with loss. Taking the detour loss out of the noise curve brings the leg to 37 cm, but it removes the scatter too (11.5 cm against the real 34.7) and worsens W1 to 13.3 cm, so it was rejected.
 - **Wood adds no measurable scatter**, in reality or in the simulation. It does add bias, roughly as modelled.
-- **Constellation 4 is noisier than the simulation even on unblocked pairs**, like constellation 3.
+- **Constellation 4 is noisier than the simulation even on unblocked pairs**, like constellation 3, despite the outlier term.
 - **Box positions weren't surveyed in UTIL's flights.** They were placed 0.5 m in front of each anchor, so the simulated metal effect also depends on that assumption.
 
 Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each path with a median tracking error of 3-7 cm. Anchors were carried by `static: true` robots at their surveyed positions.

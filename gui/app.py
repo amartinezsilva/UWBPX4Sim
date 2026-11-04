@@ -183,6 +183,8 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         ]),
         ("Additive noise mean and persistent bias.", [
             ("gaussian_noise_mean_cm", 0.0),
+            ("moving_outlier_probability", 0.0),
+            ("moving_outlier_mean_cm", 30.0),
             ("apply_pair_bias", False),
             ("bias_min_cm", -27.0),
             ("bias_max_cm", 20.0),

@@ -100,6 +100,8 @@ private:
   unsigned int randomSeed_{0};
 
   std::unordered_map<std::string, double> pairBiasCm_;
+  // Each tag's position at the previous update.
+  std::unordered_map<gz::sim::Entity, gz::math::Vector3d> lastTagPosition_;
   std::uniform_real_distribution<double> biasCmDist_{-27.0, 20.0};
 
   // Configurable sensor model parameters (units: cm, unless noted).
@@ -123,6 +125,10 @@ private:
   // If false, obstacles don't affect dropout (only the path loss does);
   // noise still uses the full link budget.
   bool enableNlosDropout_{true};
+  // Moving tags only: each leg reads long with this probability, by an
+  // exponential excess of this mean. 0 disables it.
+  double movingOutlierProbability_{0.0};
+  double movingOutlierMeanCm_{30.0};
   // Ignore intersections too close to endpoints to avoid self-hit artifacts.
   double nlosEndpointMarginM_{0.02};
   // Obstacle loss at or above which a link is NLOS (noise folded positive).

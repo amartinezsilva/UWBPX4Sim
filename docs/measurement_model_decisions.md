@@ -44,6 +44,7 @@ This is the record of every modelling decision in `UWBGazeboSystem` (the equatio
 | 3.6 | $`L_P = 0`$ dB | **Assumption** | Not observable in TDOA (cancels between legs); matters only in TWR, where it sets the distance with zero power bias. |
 | 3.7 | Per-anchor persistent offsets uniform on ±3.6 cm (UTIL) | Fitted (spread); **Assumption (uniform shape, √2 split)** | After removing the power trend, UTIL's per-setup mean error scatters by $`\sigma_r = 2.96`$ cm. The simulated experiment redraws both anchors per setup, so each anchor gets $`\sigma_r/\sqrt 2`$ (uniform half-width $`\sqrt{1.5}\,\sigma_r`$). In UTIL's distance test only anchor 1 moved, so this split is chosen to reproduce the experiment's scatter, not derived from physics. **Flights:** the 8 radios show a larger spread (σ ≈ 4.5 cm); widening to match was tested and rejected (D4), see open decision 10. |
 | 3.8 | Eliko persistent bias range [-27, +20] cm, off by default | Source | From the original Eliko preset (paper Table II lists pair bias disabled). Not re-derived. |
+| 3.9 | Moving-tag outliers: each leg reads long with $`p_o`$ = 0.05, by an exponential excess of mean $`m_o`$ = 25 cm, only if the tag moved more than 1 cm since the last update | Fitted (values); **Assumption (form, 1 cm gate)** | See D7. The motion gate rests on the data (0.0-0.02 % outliers in static LOS, 1-16 % in flights), but static tests also differ from flights in platform, so motion itself isn't proven to be the cause. Off in the Eliko preset: no data. |
 
 ## 4. Evidence for the received-power bias
 
@@ -97,6 +98,27 @@ Comparison method: W1 between real and simulated TDOA error distributions, same 
 
 Results, tables and figures: [Calibration](measurement_model.md#calibration).
 
+## Second calibration round (2026-11-04)
+
+Prompted by the remaining flight mismatch. The user's added condition: **no excessive parameters; always the simplest solution that gives the best results.** The dataset and tools were restored for this round and removed afterwards. The baseline reproduced first: static results exactly; LOS flights 5.20 / 3.78 cm; NLOS flights 8.58 / 13.17 cm (documented earlier as 8.26 / 13.11, so flights aren't bit-reproducible and differences near 0.3 cm mean nothing).
+
+| Decision | Change | Evidence |
+| --- | --- | --- |
+| D7 | **Kept.** Moving-tag outliers, $`p_o`$ = 0.05, $`m_o`$ = 25 cm (decision 3.9) | LOS flights W1 5.20 / 3.78 → 3.07 / 1.75 cm; NLOS 8.58 / 13.17 → 7.89 / 11.38 cm; every constellation better. Held-out trial 4 (not used in the fit): const 1 4.29 / 2.06 → 2.81 / 1.36, const 2 3.00 / 1.66 → 1.75 / 0.93, const 3 9.49 / 9.07 → 7.40 / 7.20 cm. Static: unaffected, verified on the final build. Values picked from a grid on the recorded flights; the optimum is broad. |
+| D8 | **Rejected and removed.** Metal detour loss out of the noise curve, with a fixed metal noise of 18 cm | Fixes the leg size (57 → 36.8 cm, real 27.9) but flight W1 worsens: 8.58 / 12.88 → 13.29 / 16.45 cm (pooled per pair), because metal scatter falls to 11.5 cm against the real 34.7. Static metal W1 6.88 → 6.91 cm. |
+| D9 | **Rejected, not implemented.** Bias-only metal: same, with the shift from `material_metal_detour_bias_cm` | Offline: static metal W1 doubles (6.0 → 10-13 cm), within-placement spread 4.6 cm against the real 7.1. |
+| D10 | **Rejected, not implemented.** Excess delay as a field correlated over tag travel, scaled by $`L_{	ext{obs}}`$ (Gudmundson-style) | Offline over 60 seeds, summed pooled W1 over the six anTag obstacles: 20.5-22.8 cm against 19.4 cm for the current model. It helps metal (5.75 → 3.37 cm) but hurts the cabinet (6.17 → 9.56 cm), and it needs a correlation length plus per-link state. With 6 placements, a single seed's W1 also penalises any model with real placement randomness: a model's W1 against itself reaches 4-8 cm. |
+| D11 | **Not pursued.** Per-anchor outlier rates or burst states | Real rates differ strongly per anchor, but the added parameters and state go against the simplicity condition, and the uniform term already improves every group. |
+
+**Measured on the real data:**
+
+- **Static spread is mostly between placements.** Within-placement robust std: metal 7.1 cm, wood 4.6-6.1 cm, LOS 4.9 cm. This corrects the reading in open decision 7, which took pooled spreads as noise. The model's folded noise over-produces within-placement spread behind metal (11.2 cm) and under-produces placement scatter (2.9 cm against 14.9 cm).
+- **Placement sd:** metal 14.9, wooden shelf 13.7, cabinet 7.3, plastic 2.8, foam 1.2, cardboard 1.0 cm. The shelf's is mostly geometric: its $`L_{	ext{obs}}`$ is 6 dB in four placements and 19 dB in two.
+- **Metal leg in flight:** medians 26-29 cm in all three trajectories, correlation over tag separation 0.82 (< 0.1 m), 0.57 (0.5 m), 0.41 (1 m), 0.23 (2 m); repeatable between flights (0.55-0.62 over shared 0.5 m cells). Mean 64.6 cm against a median of 27 cm: a very heavy tail.
+- **LOS tails are per-anchor and not fixed:** const 3 anchors 6 and 3 read > 30 cm long in 26 % and 14.6 % of samples, others 0.7-4 %. Const 4: anchor 2 (metal) 32.9 %, anchor 5 (wood) 11.1 %, wood anchors 0 and 7 about 4 %. Correlation is gone by about 0.25 m and repeatability between flights is low for anchor 6 (-0.33 to 0.48).
+
+W1 pairs in this section are raw / each pair's median removed. `analyze_flight` removes medians per flight; D8's pooled figures group each pair across flights, which is why they differ slightly.
+
 ### Pipeline problems found
 
 These affected the comparison and were fixed; the first two also apply to normal use:
@@ -126,17 +148,17 @@ How UTIL's flights were reproduced in the full pipeline. These are experiment ch
 
 These are the assumptions above that data could still change, what the UTIL experiments showed, and what would settle each:
 
-1. **Noise core and tails (3.2):** the LOS core is 15-30 % too wide at 4 cm, but narrowing it (D2) worsens the high-loss NLOS fit, because the model's spread doesn't grow enough with loss (open decision 7). Fixing 7 first would let the LOS core be narrowed without that cost. A heavy-tail component for the real data's tails and gross outliers (three single samples 9-14 m off in the LOS angle test; wide, multi-modal errors behind wood and metal) is also open.
+1. **Noise core and tails (3.2):** the LOS core is 15-30 % too wide at 4 cm, but narrowing it (D2) worsens the high-loss NLOS fit, because the model's spread doesn't grow enough with loss (open decision 7). Fixing 7 first would let the LOS core be narrowed without that cost. D7 added a tail for moving tags; static gross outliers (three single samples 9-14 m off in the LOS angle test) stay unmodelled.
 2. **Power-bias form (3.5):** linear for now (D3); APS011's Table 2 shape driven by RSL would saturate correctly but needs $`P_T + G`$.
 3. **Session offset:** the LOS angle test's real mean error is +5.7 cm, while the distance-test fit predicts -1.5 cm for its geometry. The model draws offsets symmetric around 0 and can't predict a session's level.
 4. **Max range (1.3):** 75 m (paper/datasheet) vs 50 m (Eliko web page).
 5. **Dielectric delay and metal detour bias (2.6, 2.7):** decided (D1), and the flights support it: with no detour bias the metal leg is already over-predicted. Still to do: decide whether solid walls should use the delay.
 6. **Obstacle losses (2.4, 2.5, 2.6 loss):** the assumed plastic/cardboard/foam properties and the 20 dB metal detour loss feed both the power bias and the folding, so they're coupled to decision 5.
-7. **NLOS spread and metal size (3.1 shape, 3.4):** real robust std behind wood and metal is 9-13 cm in the static tests; simulated with D1 it's 7.9 (shelf), 5.3 (cabinet) and 11.5 cm (metal). The real distributions are also multi-modal, which a single folded Gaussian can't produce. This is what blocked D2. The flights add a second symptom: because noise rises steeply with total loss, the metal leg's bias depends on distance in the model (57 cm in flight, 35 cm static) but barely in reality (29 and 35 cm). Separating obstacle noise from the total-loss curve would address both, and is a model change rather than a tuning.
+7. **NLOS spread and metal size (3.1 shape, 3.4):** real robust std behind wood and metal is 9-13 cm in the static tests; simulated with D1 it's 7.9 (shelf), 5.3 (cabinet) and 11.5 cm (metal). The real distributions are also multi-modal, which a single folded Gaussian can't produce. This is what blocked D2. The flights add a second symptom: because noise rises steeply with total loss, the metal leg's bias depends on distance in the model (57 cm in flight, 35 cm static) but barely in reality (29 and 35 cm). The second round tested this: separating obstacle noise from the total-loss curve (D8) fixes the size but loses the scatter, and a correlated field (D10) fits metal but not wood, so both were rejected. Note the static spreads quoted here are pooled over placements; see the second round's measurements. A geometric detour around obstacle edges is untested.
 8. **Anchor-anchor link (5.x):** not simulated. Real anAn errors stay within ±0.8 cm of LOS except plastic (-3.5 cm) and added spread/outliers behind metal, so the omission is minor for these obstacles. Not modelled for now: how an anchor-anchor error enters TDOA depends on the TDOA3 protocol's use of inter-anchor timing, which hasn't been sourced yet; to revisit if the flight data shows errors only it can explain, or for anchors mounted on robots, where the anchor-anchor link is blocked more often.
 9. **Still unvalidated:** $`n = 2`$ and the $`\sigma`$/dropout shapes beyond 6.5 m (1.2, 3.1, 3.3), the 3 dB NLOS threshold (2.8) and the 10 dB body cap (2.9) -- UTIL's identification data can't test them.
 10. **Per-anchor offset spread (3.7):** the flights measure σ ≈ 4.5 cm over 8 radios; the preset's 2.1 cm comes from one pair's scatter between setups. Part of D4's static penalty comes from the static experiment redrawing both anchors in every setup, while the real tests used the same two radios throughout. Holding the offsets fixed across setups would make the static test a fair check of a wider range.
-11. **Environment noise (constellations 3 and 4):** real noise is about twice the simulation's without any modelled obstacle. An optional per-environment noise factor could represent it; multipath around the mounts is a hypothesis, not a measured cause.
+11. **Environment noise (constellations 3 and 4):** real noise is about twice the simulation's without any modelled obstacle. D7 narrows the gap but doesn't close it. The second round showed the excess is concentrated in specific anchors rather than spread across the environment, so a per-environment factor wouldn't fit; multipath around the mounts remains a hypothesis, and the low repeatability argues against fixed reflections.
 12. **Rover physics with tall anchors:** unarmed rovers rocked under physics, up to 85 cm at ceiling-height anchors. Suspected cause: the 0.0001 kg anchor link on a fixed joint, up to 2.85 m above `base_link`. Only four of eight rovers moved, and why isn't known. To diagnose before relying on tall anchors on moving UGVs.
 13. **Fixed anchors in the world:** `static: true` carriers are a placeholder until anchors can be placed directly.
 

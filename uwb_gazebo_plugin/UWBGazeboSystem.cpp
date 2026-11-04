@@ -132,8 +132,8 @@ constexpr double kPositiveEpsilon = 1e-6;
 
   // Default material table. "generic" uses plasterboard's attenuation (a
   // typical interior wall) but no excess-delay bias by default, since an
-  // untagged obstacle's real material is unknown. See README.md,
-  // "Measurement model".
+  // untagged obstacle's real material is unknown. See
+  // docs/measurement_model.md.
   const std::unordered_map<std::string, MaterialModel> &materialModels()
   {
     using Kind = MaterialModel::Kind;
@@ -202,9 +202,13 @@ constexpr double kPositiveEpsilon = 1e-6;
     double obstacleLossDb{0.0};        // L_obs: walls, materials, bodies
     double biasCm{0.0};                // beta: excess delay + metal detour + power bias
     bool isNlos{false};
+    bool tagMoving{false};
     double dropoutProbability{0.0};
     double noiseStddevCm{0.0};
   };
+
+  // Smallest step between updates that counts as a moving tag.
+  constexpr double kMovingTagMinStepM = 0.01;
 
   // Parameters of the previous (severity-curve) model. They no longer
   // exist; Configure() says so rather than silently ignoring an old preset.
@@ -320,6 +324,9 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
   clampNonNegative(this->bodyShadowMaxLossDb_, "body_shadow_max_loss_db");
   clampNonNegative(this->metalDetourLossDb_, "material_metal_detour_loss_db");
   clampNonNegative(this->metalDetourBiasCm_, "material_metal_detour_bias_cm");
+  clampNonNegative(this->movingOutlierProbability_, "moving_outlier_probability");
+  clampNonNegative(this->movingOutlierMeanCm_, "moving_outlier_mean_cm");
+  this->movingOutlierProbability_ = std::min(this->movingOutlierProbability_, 1.0);
 
   if (this->noiseEndLossDb_ < this->noiseStartLossDb_)
   {
@@ -425,6 +432,8 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readDouble("dropout_width_db", this->dropoutWidthDb_);
 
   readBool("enable_nlos_dropout", this->enableNlosDropout_);
+  readDouble("moving_outlier_probability", this->movingOutlierProbability_);
+  readDouble("moving_outlier_mean_cm", this->movingOutlierMeanCm_);
   readDouble("nlos_endpoint_margin_m", this->nlosEndpointMarginM_);
   readDouble("nlos_min_loss_db", this->nlosMinLossDb_);
   readDouble("body_shadow_max_loss_db", this->bodyShadowMaxLossDb_);
@@ -962,11 +971,22 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	const std::unordered_map<gz::sim::Entity, std::string> *obstacleMaterialsPtr =
 		this->enableMaterialAttenuation_ ? &obstacleMaterials : nullptr;
 
+	// Which tags moved since the last update (for the moving-tag outliers).
+	std::unordered_map<gz::sim::Entity, bool> tagMoving;
+	for (const auto &[tagName, tagEntity] : tags)
+	{
+		const gz::math::Vector3d tagPos = computeWorldPose(tagEntity, ecm).Pos();
+		const auto last = this->lastTagPosition_.find(tagEntity);
+		tagMoving[tagEntity] = last != this->lastTagPosition_.end() &&
+		                       tagPos.Distance(last->second) > kMovingTagMinStepM;
+		this->lastTagPosition_[tagEntity] = tagPos;
+	}
+
 	// Geometry + link budget of one tag-anchor link: what the ray crosses,
 	// the excess loss L = L_d + L_obs, and from it the LOS/NLOS regime, noise
 	// stddev and dropout probability. Shared by TWR (one link per
-	// measurement) and TDOA (two links per measurement). See README.md,
-	// "Measurement model".
+	// measurement) and TDOA (two links per measurement). See
+	// docs/measurement_model.md.
 	auto evaluateLink = [&](const gz::sim::Entity &_tagEntity,
 	                        const gz::math::Vector3d &_tagPos,
 	                        const gz::sim::Entity &_anchorEntity,
@@ -974,6 +994,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	{
 		LinkState link;
 		link.distanceM = _tagPos.Distance(_anchorPos);
+		link.tagMoving = tagMoving.at(_tagEntity);
 
 		const BlockedPath wallPath =
 			computeAabbBlockedPath(_tagPos, _anchorPos, obstacleLinks, _tagEntity, _anchorEntity,
@@ -1020,6 +1041,12 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			std::normal_distribution<double>(this->noiseMeanCm_, _link.noiseStddevCm)(this->rng_);
 		if (_link.isNlos && noiseCm < 0.0)
 			noiseCm = -noiseCm;
+		// Occasional late first path, seen only on moving tags in UTIL's data.
+		if (_link.tagMoving && this->movingOutlierProbability_ > 0.0 &&
+		    std::bernoulli_distribution(this->movingOutlierProbability_)(this->rng_))
+		{
+			noiseCm += std::exponential_distribution<double>(1.0 / this->movingOutlierMeanCm_)(this->rng_);
+		}
 		return noiseCm + _link.biasCm;
 	};
 
