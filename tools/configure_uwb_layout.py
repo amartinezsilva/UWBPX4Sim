@@ -19,7 +19,7 @@ uavs:
     model: x500                      # optional, a uav type from models/vehicles.yaml
     spawn_pose: [x, y, z, roll, pitch, yaw]
     offboard: {... per-vehicle ROS/offboard parameters ...}
-    tags:
+    tags:                            # any robot may carry tags, anchors or both
       - {id: 1, position: [x, y, z]}
       - ...
 ugvs:
@@ -34,7 +34,8 @@ static_anchors:                      # optional, fixed in the world instead of o
   - {id: 5, position: [x, y, z]}     # world coordinates, same frame as spawn_pose
   - ...
 
-`ugvs` may be empty or omitted when the layout has static anchors.
+`uavs` and `ugvs` may each be empty or omitted, as long as the layout still has
+at least one tag and one anchor.
 
 Global tag and anchor ids must be unique. Pair topics remain globally unique as
 `aItJ`, where `I` is the unique anchor id and `J` is the unique tag id.
@@ -107,7 +108,8 @@ class VehicleLayout:
     id: int
     model: VehicleType
     spawn_pose: SpawnPose
-    sensors: List[SensorPlacement]
+    tags: List[SensorPlacement]
+    anchors: List[SensorPlacement]
     offboard: dict[str, Any]
 
 
@@ -127,11 +129,11 @@ class UwbLayout:
 
     @property
     def all_tags(self) -> List[SensorPlacement]:
-        return [sensor for uav in self.uavs for sensor in uav.sensors]
+        return [tag for vehicle in [*self.uavs, *self.ugvs] for tag in vehicle.tags]
 
     @property
     def all_anchors(self) -> List[SensorPlacement]:
-        return [sensor for ugv in self.ugvs for sensor in ugv.sensors] + self.static_anchors
+        return [anchor for vehicle in [*self.uavs, *self.ugvs] for anchor in vehicle.anchors] + self.static_anchors
 
 
 @dataclass(frozen=True)
@@ -358,9 +360,8 @@ def _parse_vehicle_layouts(
     field_name: str,
     role: str,
     catalog: Mapping[str, VehicleType],
-    sensor_field: str,
-    sensor_label: str,
-    global_seen_sensor_ids: set[int],
+    seen_tag_ids: set[int],
+    seen_anchor_ids: set[int],
 ) -> List[VehicleLayout]:
     if not isinstance(raw_vehicles, list):
         raise ValueError(f"{field_name} must be a list.")
@@ -371,7 +372,7 @@ def _parse_vehicle_layouts(
         entry_name = f"{field_name}[{idx}]"
         if not isinstance(raw_vehicle, dict):
             raise ValueError(
-                f"{entry_name} must be an object with 'id', optional 'spawn_pose', required 'offboard', and '{sensor_field}'."
+                f"{entry_name} must be an object with 'id', optional 'spawn_pose', required 'offboard', 'tags' and/or 'anchors'."
             )
 
         if "id" not in raw_vehicle:
@@ -386,11 +387,17 @@ def _parse_vehicle_layouts(
             raise ValueError(f"Duplicate {field_name[:-1]} id {vehicle_id} found in layout.")
         seen_vehicle_ids.add(vehicle_id)
 
-        sensors = _parse_sensor_entries(
-            raw_vehicle.get(sensor_field, []),
-            field_name=f"{entry_name}.{sensor_field}",
-            sensor_label=sensor_label,
-            global_seen_ids=global_seen_sensor_ids,
+        tags = _parse_sensor_entries(
+            raw_vehicle.get("tags", []),
+            field_name=f"{entry_name}.tags",
+            sensor_label="tag",
+            global_seen_ids=seen_tag_ids,
+        )
+        anchors = _parse_sensor_entries(
+            raw_vehicle.get("anchors", []),
+            field_name=f"{entry_name}.anchors",
+            sensor_label="anchor",
+            global_seen_ids=seen_anchor_ids,
         )
         vehicles.append(
             VehicleLayout(
@@ -399,7 +406,8 @@ def _parse_vehicle_layouts(
                     raw_vehicle.get("model"), role=role, catalog=catalog, field_name=f"{entry_name}.model"
                 ),
                 spawn_pose=_parse_spawn_pose(raw_vehicle.get("spawn_pose"), f"{entry_name}.spawn_pose"),
-                sensors=sensors,
+                tags=tags,
+                anchors=anchors,
                 offboard=_to_mapping(raw_vehicle["offboard"], f"{entry_name}.offboard"),
             )
         )
@@ -413,30 +421,25 @@ def load_layout(layout_path: Path, catalog_path: Optional[Path] = None) -> UwbLa
     if not isinstance(data, dict):
         raise ValueError("Layout file must be a mapping/object.")
 
-    if "uavs" not in data:
-        raise ValueError("Layout file must include 'uavs'.")
-
     catalog = load_vehicle_catalog(catalog_path or DEFAULT_UWB_ROOT / VEHICLE_CATALOG_RELPATH)
     seen_tag_ids: set[int] = set()
     seen_anchor_ids: set[int] = set()
 
     uavs = _parse_vehicle_layouts(
-        data["uavs"],
+        data.get("uavs") or [],
         field_name="uavs",
         role="uav",
         catalog=catalog,
-        sensor_field="tags",
-        sensor_label="tag",
-        global_seen_sensor_ids=seen_tag_ids,
+        seen_tag_ids=seen_tag_ids,
+        seen_anchor_ids=seen_anchor_ids,
     )
     ugvs = _parse_vehicle_layouts(
         data.get("ugvs") or [],
         field_name="ugvs",
         role="ugv",
         catalog=catalog,
-        sensor_field="anchors",
-        sensor_label="anchor",
-        global_seen_sensor_ids=seen_anchor_ids,
+        seen_tag_ids=seen_tag_ids,
+        seen_anchor_ids=seen_anchor_ids,
     )
     static_anchors = _parse_sensor_entries(
         data.get("static_anchors") or [],
@@ -1002,6 +1005,12 @@ def node_name(role: str, vehicle_id: int) -> str:
     return f"{role}_offboard_control_{vehicle_id}"
 
 
+def _mounted_sensor_params(vehicle: VehicleLayout) -> dict[str, Any]:
+    params = {f"tags.{tag.id}.position": _flow_vector(list(tag.position)) for tag in vehicle.tags}
+    params.update({f"anchors.{anchor.id}.position": _flow_vector(list(anchor.position)) for anchor in vehicle.anchors})
+    return params
+
+
 def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) -> dict[str, Any]:
     vehicle = assignment.vehicle
     params = resolve_offboard_params(vehicle.offboard, role="uav", vehicle_id=vehicle.id)
@@ -1029,9 +1038,7 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "world_frame_id": params["world_frame_id"],
     }
 
-    for sensor in vehicle.sensors:
-        ros_params[f"tags.{sensor.id}.position"] = _flow_vector(list(sensor.position))
-
+    ros_params.update(_mounted_sensor_params(vehicle))
     return ros_params
 
 
@@ -1063,9 +1070,7 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "tags": {"ids": [str(sensor.id) for sensor in layout.all_tags]},
     }
 
-    for sensor in vehicle.sensors:
-        ros_params[f"anchors.{sensor.id}.position"] = _flow_vector(list(sensor.position))
-
+    ros_params.update(_mounted_sensor_params(vehicle))
     return ros_params
 
 
@@ -1179,23 +1184,29 @@ def main() -> None:
     custom_models_dir.mkdir(parents=True, exist_ok=True)
 
     generated_model_dirs: List[Path] = []
-    for vehicle_role, vehicle in iter_spawn_vehicles(layout):
+    for _, vehicle in iter_spawn_vehicles(layout):
         vehicle_type = vehicle.model
         model_name = vehicle_type.model_name(vehicle.id)
-        is_uav = vehicle_role == "uav"
         target_dir = custom_models_dir / model_name
         model_sdf = _copy_and_prepare_model_dir(
             template_dir=vehicle_type.resolve_template_dir(px4_models_dir, uwb_root),
             target_dir=target_dir,
             target_model_name=model_name,
-            extra_meshes=(tag_mesh if is_uav else anchor_mesh,),
+            extra_meshes=(tag_mesh, anchor_mesh),
         )
         update_model_file(
             model_sdf,
-            prefix="uwb_tag" if is_uav else "uwb_anchor",
-            sensors=vehicle.sensors,
-            spec=_tag_visual_spec(model_name) if is_uav else _anchor_visual_spec(model_name),
-            label="Tag" if is_uav else "Anchor",
+            prefix="uwb_tag",
+            sensors=vehicle.tags,
+            spec=_tag_visual_spec(model_name),
+            label="Tag",
+        )
+        update_model_file(
+            model_sdf,
+            prefix="uwb_anchor",
+            sensors=vehicle.anchors,
+            spec=_anchor_visual_spec(model_name),
+            label="Anchor",
         )
         if vehicle_type.plugins_from is not None:
             _append_plugin_blocks(

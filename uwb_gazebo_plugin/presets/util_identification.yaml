@@ -52,10 +52,10 @@ min_dropout_probability: 0.02
 # the metal-blocked pairs keep 78-99 % of the unblocked sample rate, while
 # obstacle dropout left 5-7 %. Static results unchanged.
 enable_nlos_dropout: false
-# Moving tags only: each leg reads long with this probability, by an
-# exponential excess of this mean. UTIL's flights have 1-16 % outliers
-# (more than 30 cm from the pair's median) where its static tests have
-# about 0 %, so a still tag is never affected.
+# Links with a moving tag or anchor only: each leg reads long with this
+# probability, by an exponential excess of this mean. UTIL's flights have
+# 1-16 % outliers (more than 30 cm from the pair's median) where its static
+# tests have about 0 %, so a link with both ends still is never affected.
 moving_outlier_probability: 0.05
 moving_outlier_mean_cm: 25.0
 

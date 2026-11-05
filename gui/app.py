@@ -94,15 +94,15 @@ def validate_layout(layout: dict[str, Any], vehicle_types: list[dict[str, str]])
     if len(ugv_ids) != len(set(ugv_ids)):
         errors.append("UGV ids must be unique.")
 
-    tag_ids = [t.get("id") for v in uavs for t in (v.get("tags") or [])]
+    tag_ids = [t.get("id") for v in uavs + ugvs for t in (v.get("tags") or [])]
     if len(tag_ids) != len(set(tag_ids)):
-        errors.append("Tag ids must be globally unique across all UAVs.")
+        errors.append("Tag ids must be globally unique.")
 
     static_anchors = layout.get("static_anchors") or []
-    anchor_ids = [a.get("id") for v in ugvs for a in (v.get("anchors") or [])]
+    anchor_ids = [a.get("id") for v in uavs + ugvs for a in (v.get("anchors") or [])]
     anchor_ids += [a.get("id") for a in static_anchors]
     if len(anchor_ids) != len(set(anchor_ids)):
-        errors.append("Anchor ids must be globally unique across UGV and static anchors.")
+        errors.append("Anchor ids must be globally unique.")
 
     for v in uavs:
         if len(v.get("spawn_pose") or []) != 6:

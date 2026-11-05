@@ -116,8 +116,7 @@ function nextId(list) {
 
 function nextGlobalSensorId() {
   const used = new Set([
-    ...layout.uavs.flatMap((v) => (v.tags || []).map((t) => t.id)),
-    ...layout.ugvs.flatMap((v) => (v.anchors || []).map((a) => a.id)),
+    ...[...layout.uavs, ...layout.ugvs].flatMap((v) => [...(v.tags || []), ...(v.anchors || [])].map((s) => s.id)),
     ...layout.static_anchors.map((a) => a.id),
   ]);
   let i = 1;
@@ -138,24 +137,21 @@ function addVehicle(kind) {
     spawn_pose: [0, 0, 0, 0, 0, 0],
     offboard: JSON.parse(JSON.stringify(kind === "uav" ? DEFAULT_UAV_OFFBOARD : DEFAULT_UGV_OFFBOARD)),
   };
-  vehicle[kind === "uav" ? "tags" : "anchors"] = [];
+  vehicle.tags = [];
+  vehicle.anchors = [];
   list.push(vehicle);
   renderVehicles();
 }
 
-// Static anchors live on the layout itself, so "static" rows pass it as owner.
-function sensorKey(kind) {
-  return { uav: "tags", ugv: "anchors", static: "static_anchors" }[kind];
-}
-
-function addSensor(kind, vehicle) {
-  const key = sensorKey(kind);
-  vehicle[key] = vehicle[key] || [];
-  vehicle[key].push({ id: nextGlobalSensorId(), position: [0, 0, 0] });
+// `owner[key]` holds the sensor list: a robot's "tags" or "anchors", or the
+// layout's own "static_anchors".
+function addSensor(key, owner) {
+  owner[key] = owner[key] || [];
+  owner[key].push({ id: nextGlobalSensorId(), position: [0, 0, 0] });
   renderVehicles();
 }
 
-function renderSensorRow(kind, vehicle, sensor) {
+function renderSensorRow(key, owner, sensor) {
   const row = el("div", { class: "sensor-row" });
   const idInput = el("input", { type: "number", step: "1", min: "0" });
   idInput.value = sensor.id;
@@ -170,8 +166,7 @@ function renderSensorRow(kind, vehicle, sensor) {
   const removeBtn = el("button", { class: "remove-sensor", type: "button", title: "Remove" });
   removeBtn.textContent = "×";
   removeBtn.addEventListener("click", () => {
-    const key = sensorKey(kind);
-    vehicle[key] = vehicle[key].filter((s) => s !== sensor);
+    owner[key] = owner[key].filter((s) => s !== sensor);
     renderVehicles();
   });
   row.appendChild(removeBtn);
@@ -245,17 +240,17 @@ function renderVehicleCard(kind, vehicle) {
   poseSet.appendChild(poseGrid);
   card.appendChild(poseSet);
 
-  const sensorSet = el("fieldset", {}, [
-    el("legend", { text: kind === "uav" ? "tags" : "anchors" }),
-  ]);
-  const sensorList = el("div", { class: "sensor-list" });
-  (vehicle[sensorKey(kind)] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(kind, vehicle, sensor)));
-  sensorSet.appendChild(sensorList);
-  const addSensorBtn = el("button", { type: "button" });
-  addSensorBtn.textContent = kind === "uav" ? "+ Add tag" : "+ Add anchor";
-  addSensorBtn.addEventListener("click", () => addSensor(kind, vehicle));
-  sensorSet.appendChild(addSensorBtn);
-  card.appendChild(sensorSet);
+  [["tags", "+ Add tag"], ["anchors", "+ Add anchor"]].forEach(([key, addLabel]) => {
+    const sensorSet = el("fieldset", {}, [el("legend", { text: key })]);
+    const sensorList = el("div", { class: "sensor-list" });
+    (vehicle[key] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(key, vehicle, sensor)));
+    sensorSet.appendChild(sensorList);
+    const addSensorBtn = el("button", { type: "button" });
+    addSensorBtn.textContent = addLabel;
+    addSensorBtn.addEventListener("click", () => addSensor(key, vehicle));
+    sensorSet.appendChild(addSensorBtn);
+    card.appendChild(sensorSet);
+  });
 
   const obSet = el("fieldset", {}, [el("legend", { text: "offboard" })]);
   obSet.appendChild(renderOffboardFields(vehicle));
@@ -273,7 +268,7 @@ function renderVehicles() {
   layout.ugvs.forEach((v) => ugvList.appendChild(renderVehicleCard("ugv", v)));
   const staticList = document.getElementById("static-anchor-list");
   staticList.innerHTML = "";
-  layout.static_anchors.forEach((a) => staticList.appendChild(renderSensorRow("static", layout, a)));
+  layout.static_anchors.forEach((a) => staticList.appendChild(renderSensorRow("static_anchors", layout, a)));
 }
 
 async function refreshLayoutPresets() {
@@ -299,7 +294,7 @@ async function refreshVehicleTypes() {
 
 document.getElementById("add-uav").addEventListener("click", () => addVehicle("uav"));
 document.getElementById("add-ugv").addEventListener("click", () => addVehicle("ugv"));
-document.getElementById("add-static-anchor").addEventListener("click", () => addSensor("static", layout));
+document.getElementById("add-static-anchor").addEventListener("click", () => addSensor("static_anchors", layout));
 
 document.getElementById("layout-new").addEventListener("click", () => {
   layout = { uavs: [], ugvs: [], static_anchors: [], world: "" };
