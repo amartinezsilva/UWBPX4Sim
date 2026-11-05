@@ -120,8 +120,11 @@ print_menu() {
   # user tell at a glance, before picking option 2, whether a setup is
   # already loaded or still needs to be run first. Checked fresh on every
   # call (not cached) so it reflects setup having *just* finished too.
+  # .setup_env lives in the host-mounted repo and outlives the container,
+  # while the built plugin lives in this container's PX4 tree: both must exist.
   local setup_tick=""
-  if [[ -f "$UWBPX4SIM_DIR/.setup_env" ]]; then
+  local plugin_lib="$PX4_DIR/build/px4_sitl_default/src/modules/simulation/gz_plugins/libUWBGazeboPlugin.so"
+  if [[ -f "$UWBPX4SIM_DIR/.setup_env" && -f "$plugin_lib" ]]; then
     setup_tick=" ${C_GREEN}✓ configured${C_RESET}"
   fi
   cat <<EOF
