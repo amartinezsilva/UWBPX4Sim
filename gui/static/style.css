@@ -110,6 +110,8 @@ button.primary:hover { background: var(--accent-dark); }
   margin-bottom: 0.5rem;
 }
 .column-header h2 { font-size: 1rem; margin: 0; }
+.static-anchors { margin-top: 1rem; }
+.static-anchors .hint { margin: 0 0 0.5rem; color: var(--muted); font-size: 0.78rem; }
 
 .vehicle-card {
   background: var(--panel);

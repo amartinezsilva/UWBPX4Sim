@@ -56,7 +56,7 @@ const PARAM_UI = {
 let trajectoryOptions = [];
 // [{name, role}] from models/vehicles.yaml; the first one per role is the default.
 let vehicleTypes = [];
-let layout = { uavs: [], ugvs: [], world: "" };
+let layout = { uavs: [], ugvs: [], static_anchors: [], world: "" };
 
 // ---------------------------------------------------------------------------
 // small DOM helper
@@ -118,6 +118,7 @@ function nextGlobalSensorId() {
   const used = new Set([
     ...layout.uavs.flatMap((v) => (v.tags || []).map((t) => t.id)),
     ...layout.ugvs.flatMap((v) => (v.anchors || []).map((a) => a.id)),
+    ...layout.static_anchors.map((a) => a.id),
   ]);
   let i = 1;
   while (used.has(i)) i++;
@@ -142,8 +143,13 @@ function addVehicle(kind) {
   renderVehicles();
 }
 
+// Static anchors live on the layout itself, so "static" rows pass it as owner.
+function sensorKey(kind) {
+  return { uav: "tags", ugv: "anchors", static: "static_anchors" }[kind];
+}
+
 function addSensor(kind, vehicle) {
-  const key = kind === "uav" ? "tags" : "anchors";
+  const key = sensorKey(kind);
   vehicle[key] = vehicle[key] || [];
   vehicle[key].push({ id: nextGlobalSensorId(), position: [0, 0, 0] });
   renderVehicles();
@@ -164,7 +170,7 @@ function renderSensorRow(kind, vehicle, sensor) {
   const removeBtn = el("button", { class: "remove-sensor", type: "button", title: "Remove" });
   removeBtn.textContent = "×";
   removeBtn.addEventListener("click", () => {
-    const key = kind === "uav" ? "tags" : "anchors";
+    const key = sensorKey(kind);
     vehicle[key] = vehicle[key].filter((s) => s !== sensor);
     renderVehicles();
   });
@@ -239,12 +245,11 @@ function renderVehicleCard(kind, vehicle) {
   poseSet.appendChild(poseGrid);
   card.appendChild(poseSet);
 
-  const sensorKey = kind === "uav" ? "tags" : "anchors";
   const sensorSet = el("fieldset", {}, [
     el("legend", { text: kind === "uav" ? "tags" : "anchors" }),
   ]);
   const sensorList = el("div", { class: "sensor-list" });
-  (vehicle[sensorKey] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(kind, vehicle, sensor)));
+  (vehicle[sensorKey(kind)] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(kind, vehicle, sensor)));
   sensorSet.appendChild(sensorList);
   const addSensorBtn = el("button", { type: "button" });
   addSensorBtn.textContent = kind === "uav" ? "+ Add tag" : "+ Add anchor";
@@ -266,6 +271,9 @@ function renderVehicles() {
   ugvList.innerHTML = "";
   layout.uavs.forEach((v) => uavList.appendChild(renderVehicleCard("uav", v)));
   layout.ugvs.forEach((v) => ugvList.appendChild(renderVehicleCard("ugv", v)));
+  const staticList = document.getElementById("static-anchor-list");
+  staticList.innerHTML = "";
+  layout.static_anchors.forEach((a) => staticList.appendChild(renderSensorRow("static", layout, a)));
 }
 
 async function refreshLayoutPresets() {
@@ -291,9 +299,10 @@ async function refreshVehicleTypes() {
 
 document.getElementById("add-uav").addEventListener("click", () => addVehicle("uav"));
 document.getElementById("add-ugv").addEventListener("click", () => addVehicle("ugv"));
+document.getElementById("add-static-anchor").addEventListener("click", () => addSensor("static", layout));
 
 document.getElementById("layout-new").addEventListener("click", () => {
-  layout = { uavs: [], ugvs: [], world: "" };
+  layout = { uavs: [], ugvs: [], static_anchors: [], world: "" };
   renderVehicles();
   document.getElementById("world-input").value = "";
   setStatus("layout-status", "New empty layout.");
@@ -304,7 +313,12 @@ document.getElementById("layout-load").addEventListener("click", async () => {
   if (!name) return;
   try {
     const data = await api("/api/layouts/" + encodeURIComponent(name));
-    layout = { uavs: data.uavs || [], ugvs: data.ugvs || [], world: data.world || "" };
+    layout = {
+      uavs: data.uavs || [],
+      ugvs: data.ugvs || [],
+      static_anchors: data.static_anchors || [],
+      world: data.world || "",
+    };
     layout.uavs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UAV_OFFBOARD))));
     layout.ugvs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UGV_OFFBOARD))));
     renderVehicles();

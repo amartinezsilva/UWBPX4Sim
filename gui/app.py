@@ -98,9 +98,11 @@ def validate_layout(layout: dict[str, Any], vehicle_types: list[dict[str, str]])
     if len(tag_ids) != len(set(tag_ids)):
         errors.append("Tag ids must be globally unique across all UAVs.")
 
+    static_anchors = layout.get("static_anchors") or []
     anchor_ids = [a.get("id") for v in ugvs for a in (v.get("anchors") or [])]
+    anchor_ids += [a.get("id") for a in static_anchors]
     if len(anchor_ids) != len(set(anchor_ids)):
-        errors.append("Anchor ids must be globally unique across all UGVs.")
+        errors.append("Anchor ids must be globally unique across UGV and static anchors.")
 
     for v in uavs:
         if len(v.get("spawn_pose") or []) != 6:
@@ -271,6 +273,8 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             return jsonify({"error": " ".join(errors)}), 400
         if not layout.get("world"):
             layout.pop("world", None)  # omit rather than write "world: ''"
+        if not layout.get("static_anchors"):
+            layout.pop("static_anchors", None)
         path = config_dir / fname
         with open(path, "w") as f:
             yaml.dump(layout, f, Dumper=LayoutDumper, sort_keys=False, default_flow_style=False)

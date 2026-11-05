@@ -11,7 +11,7 @@
 
 namespace custom
 {
-/// \brief Gazebo system plugin that simulates UWB ranges between UAV tags and UGV anchors.
+/// \brief Gazebo system plugin that simulates UWB ranges between UAV tags and anchors.
 /// \details Each tag-anchor link is evaluated with a link budget: an excess
 /// loss L (dB) from free-space path loss plus every obstacle the line of
 /// sight crosses, which sets the noise stddev and dropout probability. See

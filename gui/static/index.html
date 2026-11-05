@@ -49,6 +49,15 @@
       </div>
     </div>
 
+    <div class="static-anchors">
+      <div class="column-header">
+        <h2>Static anchors</h2>
+        <button id="add-static-anchor">+ Add static anchor</button>
+      </div>
+      <p class="hint">Fixed in the world, not on a UGV. Positions are in world coordinates, like spawn_pose.</p>
+      <div id="static-anchor-list" class="sensor-list"></div>
+    </div>
+
     <div class="toolbar world-bar">
       <label>World
         <input id="world-input" type="text" list="world-options" placeholder="(PX4 default world)">

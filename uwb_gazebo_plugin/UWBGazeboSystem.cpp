@@ -890,7 +890,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzerr << "[UWBGazeboSystem] Duplicate global anchor id a" << anchorId
 					      << " detected in '" << fullName << "' and '" << it->second
-					      << "'. Anchor ids must be globally unique across all UGVs. Skipping duplicate.\n";
+					      << "'. Anchor ids must be globally unique across UGV and static anchors. Skipping duplicate.\n";
 				}
 				else
 				{
