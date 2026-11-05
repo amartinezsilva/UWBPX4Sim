@@ -4,3 +4,6 @@ models/custom_models/*
 
 # Dev-only record of modelling decisions
 docs/measurement_model_decisions.md
+
+# Editor settings
+.vscode/
