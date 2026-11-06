@@ -82,6 +82,10 @@ To mark an obstacle's material, add a `__material_<name>` suffix to its model na
 
 `I` and `K` are anchor ids (`I` is the TDOA reference, the lowest anchor id) and `J` is the tag id. All of these topics are bridged to ROS 2, but only the active mode publishes. Each robot also publishes `/<prefix>/odom` and `/<prefix>/gt`, with prefix `uav_<id>` or `ugv_<id>`.
 
+## Using the plugin on its own
+
+The Gazebo plugin also works without PX4 or ROS 2, in your own Gazebo Harmonic world with your own robots. See [`examples/barebones/`](examples/barebones/).
+
 ## Documentation
 
 - [Measurement model](docs/measurement_model.md): equations, materials, all plugin parameters and calibration results.

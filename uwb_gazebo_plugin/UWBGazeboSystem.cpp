@@ -677,8 +677,10 @@ bool segmentLinkIntervals(const gz::math::Vector3d &_start,
     return true;
   }
 
+  // A link with no box yet, or nothing to bound, reports an infinite box,
+  // which would read as blocking every segment.
   const auto worldBox = gz::sim::Link(_linkEntity).WorldAxisAlignedBox(_ecm);
-  if (!worldBox.has_value())
+  if (!worldBox.has_value() || !worldBox->Size().IsFinite())
     return false;
 
   double tEnter = 0.0;
