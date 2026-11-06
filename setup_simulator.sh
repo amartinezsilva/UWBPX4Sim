@@ -600,40 +600,23 @@ PYEOF
   if (( DRY_RUN )); then
     log_info "[DRY-RUN] would sync $PLUGIN_PARAMS_FILE into the <plugin ... custom::UWBGazeboSystem> block in $PX4_SERVER_CONFIG"
   else
-    result="$(python3 - "$PX4_SERVER_CONFIG" "$PLUGIN_PARAMS_FILE" <<'PYEOF'
+    result="$(python3 - "$PX4_SERVER_CONFIG" "$PLUGIN_PARAMS_FILE" "$SCRIPT_DIR/tools" <<'PYEOF'
 import os
 import re
 import shutil
 import sys
 
-import yaml
-
-PLUGIN_NAME = "custom::UWBGazeboSystem"
-PLUGIN_FILENAME = "libUWBGazeboPlugin.so"
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[3])
+from preset_to_sdf import PLUGIN_NAME, load_preset, plugin_block
 
 server_path, params_path = sys.argv[1], sys.argv[2]
 
-with open(params_path) as f:
-    params = yaml.safe_load(f) or {}
-
-if not isinstance(params, dict):
-    print(f"ERROR: {params_path} must contain a mapping of parameter: value", file=sys.stderr)
+try:
+    new_block = plugin_block(load_preset(params_path), server_config=True)
+except ValueError as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
     sys.exit(1)
-
-
-def fmt(value):
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-block_lines = [
-    f'    <plugin entity_name="*" entity_type="world" filename="{PLUGIN_FILENAME}" name="{PLUGIN_NAME}">'
-]
-for key, value in params.items():
-    block_lines.append(f"      <{key}>{fmt(value)}</{key}>")
-block_lines.append("    </plugin>")
-new_block = "\n".join(block_lines) + "\n"
 
 text = open(server_path).read()
 pattern = re.compile(

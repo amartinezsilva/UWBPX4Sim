@@ -1,0 +1,91 @@
+<?xml version="1.0"?>
+<!-- UWB plugin in a plain Gazebo world: no PX4, no ROS 2. See README.md. -->
+<sdf version="1.9">
+  <world name="barebones">
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
+
+    <!-- Replace with the output of tools/preset_to_sdf.py to use a preset. -->
+    <plugin filename="libUWBGazeboPlugin.so" name="custom::UWBGazeboSystem">
+      <uwb_mode>twr</uwb_mode>
+    </plugin>
+
+    <light type="directional" name="sun">
+      <pose>0 0 10 0 0 0</pose>
+      <diffuse>0.9 0.9 0.9 1</diffuse>
+      <direction>-0.5 0.1 -0.9</direction>
+    </light>
+
+    <!-- The plugin skips this exact name when looking for obstacles. -->
+    <model name="ground_plane">
+      <static>true</static>
+      <link name="link">
+        <collision name="collision">
+          <geometry><plane><normal>0 0 1</normal><size>30 30</size></plane></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><plane><normal>0 0 1</normal><size>30 30</size></plane></geometry>
+          <material><diffuse>0.7 0.7 0.7 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- A robot carrying tag 1. Tags and anchors are just links named
+         uwb_tag_<id> and uwb_anchor_<id>, directly on the robot's model. -->
+    <model name="robot">
+      <static>true</static>
+      <pose>0 0 0.1 0 0 0</pose>
+      <link name="base_link">
+        <collision name="collision">
+          <geometry><box><size>0.5 0.4 0.2</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>0.5 0.4 0.2</size></box></geometry>
+          <material><diffuse>0.2 0.3 0.6 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="uwb_tag_1">
+        <pose>0 0 0.6 0 0 0</pose>
+        <visual name="visual">
+          <geometry><mesh><uri>../../models/uwb_meshes/uwb_tag_eliko.stl</uri></mesh></geometry>
+          <material><diffuse>0.96 0.55 0.13 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <!-- Fixed anchors, the same distance from the tag: anchor 1 has a clear
+         line of sight, and the wall blocks anchor 2. -->
+    <model name="anchors">
+      <static>true</static>
+      <link name="uwb_anchor_1">
+        <pose>4 0 1.5 0 0 0</pose>
+        <visual name="visual">
+          <geometry><mesh><uri>../../models/uwb_meshes/uwb_anchor_eliko.stl</uri></mesh></geometry>
+          <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
+        </visual>
+      </link>
+      <link name="uwb_anchor_2">
+        <pose>0 4 1.5 0 0 0</pose>
+        <visual name="visual">
+          <geometry><mesh><uri>../../models/uwb_meshes/uwb_anchor_eliko.stl</uri></mesh></geometry>
+          <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="wall">
+      <static>true</static>
+      <pose>0 2 1.5 0 0 0</pose>
+      <link name="link">
+        <collision name="collision">
+          <geometry><box><size>6 0.2 3</size></box></geometry>
+        </collision>
+        <visual name="visual">
+          <geometry><box><size>6 0.2 3</size></box></geometry>
+          <material><diffuse>0.6 0.5 0.4 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+  </world>
+</sdf>

@@ -7,3 +7,6 @@ docs/measurement_model_decisions.md
 
 # Editor settings
 .vscode/
+
+# Standalone plugin build
+build/

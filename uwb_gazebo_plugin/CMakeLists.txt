@@ -31,45 +31,42 @@
 #
 ############################################################################
 
-# Template for a new plugin project
-# Replace TemplatePlugin with your plugin name
+# Builds two ways: on its own (cmake -S uwb_gazebo_plugin -B build), or as a
+# subdirectory of PX4's gz_plugins, which has already found the Gazebo packages.
+if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
+    cmake_minimum_required(VERSION 3.16)
+    set(UWB_STANDALONE ON)
+endif()
+
 project(UWBGazeboPlugin)
 
-# Add external dependencies if needed
-# include(${CMAKE_CURRENT_SOURCE_DIR}/dependency.cmake)
+if(UWB_STANDALONE)
+    set(CMAKE_CXX_STANDARD 17)
+    set(CMAKE_CXX_STANDARD_REQUIRED ON)
+    if(NOT CMAKE_BUILD_TYPE)
+        set(CMAKE_BUILD_TYPE Release)
+    endif()
 
-# Find required packages
-# find_package(PackageName REQUIRED)
-find_package(ament_cmake REQUIRED)
-# find_package(rclcpp REQUIRED)
-# find_package(std_msgs REQUIRED)
+    # Gazebo Harmonic. The unversioned names match PX4's gz-*_VERSION_MAJOR.
+    find_package(gz-sim NAMES gz-sim8 REQUIRED)
+    find_package(gz-plugin NAMES gz-plugin2 REQUIRED COMPONENTS register)
+    find_package(gz-transport NAMES gz-transport13 REQUIRED)
+endif()
 
 add_library(${PROJECT_NAME} SHARED
-    # Add your source files here
     UWBGazeboSystem.cpp
 )
 
-
 target_link_libraries(${PROJECT_NAME}
-    PUBLIC px4_gz_msgs
-    PUBLIC gz-sensors${gz-sensors_VERSION_MAJOR}::gz-sensors${gz-sensors_VERSION_MAJOR}
     PUBLIC gz-plugin${gz-plugin_VERSION_MAJOR}::gz-plugin${gz-plugin_VERSION_MAJOR}
     PUBLIC gz-sim${gz-sim_VERSION_MAJOR}::gz-sim${gz-sim_VERSION_MAJOR}
     PUBLIC gz-transport${gz-transport_VERSION_MAJOR}::gz-transport${gz-transport_VERSION_MAJOR}
-    # Add other dependencies as needed
-    # PUBLIC ${OtherLib_LIBS}
 )
-
 
 target_include_directories(${PROJECT_NAME}
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
-    PUBLIC ${CMAKE_CURRENT_BINARY_DIR}
-    PUBLIC px4_gz_msgs
-    # Add other include directories as needed
-#     PUBLIC ${rclcpp_INCLUDE_DIRS}
-#     PUBLIC ${std_msgs_INCLUDE_DIRS}
-    # PUBLIC ${OtherLib_INCLUDE_DIRS}
 )
 
-# Add dependencies if needed
-# add_dependencies(${PROJECT_NAME} ExternalDependency)
+if(UWB_STANDALONE)
+    install(TARGETS ${PROJECT_NAME} LIBRARY DESTINATION lib)
+endif()
