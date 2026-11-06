@@ -61,9 +61,11 @@ s(L) = \frac{1}{1 + e^{-(L - L_c)/w}}
   - **Closing the link:** at $`L_{\max}`$ = `max_link_loss_db` the link is closed, but the S alone would only have reached 0.81 there. Dividing by $`s(L_{\max})`$ stretches it to reach exactly 1, so $`p`$ rises into blackout without a jump. In our preset, p=0.63 at $`L_c`$ (35.5 dB, 60 m) and 0.5 at about 34.9 dB (56 m).
 - With `enable_nlos_dropout: false`, dropout uses $`L_d`$ only (obstacles don't drop measurements); noise still uses the full $`L`$.
 
+Figure 1 shows both curves.
+
 ![Noise standard deviation and dropout probability against the link budget](images/link_budget_curves.png)
 
-The curves use the `eliko_identification` values. In both presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.
+*Figure 1: Noise standard deviation and dropout probability against the link budget, with the `eliko_identification` values. In both presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.*
 
 ## Moving outliers
 
@@ -161,6 +163,107 @@ The same wall matters more the farther apart the robots are, since it eats into 
 - The outlier-heavy behaviour UTIL shows behind some plastic and cabinet obstacles (mostly accurate readings with occasional large misses) isn't modelled.
 - The TDOA reference anchor is fixed (lowest id), and clock synchronisation between anchors isn't simulated.
 
+## Calibration
+
+### Eliko preset (`eliko_identification`)
+
+The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bias, robots < 10 m apart) and completed with the datasheet's 75 m maximum range and ~50 cm noise near it (see the Robot Meets Ranging workshop paper, Section II-B and Table II). With $`n = 2`$, 15 m and 75 m are 23.5 dB and 37.5 dB, so the defaults reproduce those points exactly, and the link budget sets the shape in between:
+
+| $`d`$ (m) | 5 | 10 | 15 | 30 | 45 | 60 | 70 | > 75 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| $`\sigma`$ (cm) | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
+| $`p`$ | 0.020 | 0.020 | 0.020 | 0.037 | 0.201 | 0.641 | 0.908 | 1 |
+
+$`L_c`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04, before the scaling by $`s(L_{\max})`$). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `util_identification`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
+
+### UTIL preset (`util_identification`)
+
+Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset [Zhao et al.]: static identification recordings first, then flights through the full pipeline (PX4 SITL, Gazebo, ROS 2, offboard control).
+
+| Parameter | Value | Origin |
+| --- | --- | --- |
+| `min_noise_stddev_cm` | 4.0 | UTIL's LOS TDOA spread divided by $`\sqrt 2`$ |
+| `power_bias_cm_per_db` | 0.98 | Fitted on the LOS distance test ($`\pm`$ 0.18 cm/dB) |
+| `bias_min_cm`, `bias_max_cm` | -3.6, 3.6 | Scatter of the distance test's per-setup means |
+| `material_metal_detour_loss_db` | 20 | Assumed; reproduces the static metal shift |
+| `enable_dielectric_delay` | `false` | Over-predicted the static NLOS shifts |
+| `enable_nlos_dropout` | `false` | Metal-blocked pairs keep 78-99 % of the unblocked sample rate in UTIL's flights |
+| `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.05, 25 | Fitted on the flights; checked on held-out flights |
+
+#### Summary
+
+Results compare real and simulated TDOA errors with the Wasserstein-1 distance (W1, in cm; lower is better). *Centred* removes each setup's or anchor pair's own offset, leaving the noise shape.
+
+| Data | W1 raw | W1 centred |
+| --- | ---: | ---: |
+| Static, LOS | 2.2-5.8 | 0.6-1.2 |
+| Static, obstacle on the tag link | 1.3-9.3 | -- |
+| Flight, LOS | 3.07 | 1.75 |
+| Flight, NLOS | 7.89 | 11.38 |
+
+The simulation reproduces noise levels, the received-power bias in LOS, and the size of obstacle effects in static data. Flight data is harder: LOS matches well, while NLOS matches in shape but less well in size.
+
+#### Static data
+
+In LOS, the noise matches at every distance, at about 5-6 cm (Figure 2, left). The simulated means also follow the real drift with distance, from about +8 cm at 1 m to about -6 cm at 6.5 m. Individual setups aren't comparable, because the simulation draws random anchor offsets and the real means jump between neighbouring positions for reasons not established.
+
+<p align="center">
+  <img src="images/static_spread_vs_distance.png" alt="Static LOS spread against distance" width="49%">
+  <img src="images/static_material_shift.png" alt="Static NLOS shift by material" width="49%">
+</p>
+
+*Figure 2: Static data. Left: LOS spread against distance. Right: error shift by material, with the obstacle on the anchor-tag line (anTag).*
+
+With an obstacle on the anchor-tag line (Figure 2, right), the simulation reproduces how much each material shifts the error, relative to LOS (cm):
+
+| Obstacle | Shift, real / sim | W1 |
+| --- | --- | ---: |
+| Cardboard | +0.5 / -1.0 | 2.75 |
+| Foam | -0.4 / 0.0 | 1.33 |
+| Plastic | -3.5 / -7.2 | 4.84 |
+| Wooden cabinet | -9.4 / -13.7 | 9.25 |
+| Wooden shelf | -16.8 / -16.6 | 2.15 |
+| Metal | -35.2 / -34.1 | 6.69 |
+
+- **Heavier obstacles shift the error more**, in reality and in the simulation. Simulated values average 20 seeds, because each run draws its own anchor offsets and a single run can move a point by about 4 cm.
+- **Hollow objects are over-predicted by a few cm.** UTIL only gives each object's outer shape, so the plastic container and the wooden cabinet are simulated as solid boxes, which overstates their loss. Plastic also crosses the NLOS threshold because of this.
+- **Obstacle effects vary with placement more than from sample to sample.** Moving the same metal obstacle changes the real shift by about 15 cm, while the spread at any one placement stays near 7 cm, against 5 cm in LOS. The simulated shift varies less between placements.
+- **An obstacle between the anchors barely matters.** The real error stays within 1 cm of LOS, except for plastic at 3.5 cm. The simulation doesn't model this link.
+
+#### Flight data
+
+Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each path with a median tracking error of 3-7 cm. Anchors were carried by static robots at their surveyed positions. About 0.7 % of the real samples are corrupted, with errors of up to 120 m, and were excluded. 
+
+**LOS.** The noise shape and the received-power bias both carry over from the static data (Figure 3).
+
+![LOS flights: noise shape and received-power bias](images/flights_los.png)
+
+*Figure 3: LOS flights. The noise-shape panels in Figures 3 and 4 remove each anchor pair's median error. The right panels check the received-power bias: $`L_B - L_A`$ is how much weaker anchor B's signal is than anchor A's from distance alone ($`L = 20 \log_{10} d`$, so obstacles aren't included), and the y axis is the TDOA error. Each pair's mean is removed from both axes, which leaves only the changes as the tag moves. Samples more than 30 cm from the pair's median are excluded, dots are binned averages, and the slope estimates $`k_P`$.*
+
+- **The received-power bias holds:** 0.77 cm/dB real against 0.94 simulated.
+- **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving outlier term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
+- **Some anchors are much noisier than others in flight.** The cause isn't known, and the simulation treats all anchors alike, so its noise is too low for the worst ones.
+- **Per-anchor offsets are larger in flight data:** about 4.5 cm against 2.1 cm simulated. Widening them fits flights better but worsens the static fit, so the static value was kept.
+
+**NLOS.** With one metal and three wooden boxes (Figure 4):
+
+| Link | Robust std, real / sim | Outliers, real / sim |
+| --- | --- | --- |
+| Unblocked | 13.3 / 7.3 cm | 10.4 / 3.0 % |
+| Wood | 12.2 / 6.7 cm | 8.6 / 2.9 % |
+| Metal | 34.7 / 29.3 cm | 41.9 / 27.8 % |
+
+![NLOS flights: noise shape and received-power bias](images/flights_nlos.png)
+
+*Figure 4: NLOS flights. Panels as in Figure 3, with the real data also shown after removing the direction-dependent anchor bias.*
+
+- **Metal is right in sign and most of its scatter, but too large.** A blocked leg reads 28 cm long in reality and 58 cm in the simulation, because simulated noise grows steeply with total loss. Reducing that effect also removed the scatter and worsened the overall fit, so it was rejected.
+- **Obstacles don't stop measurements.** Blocked links keep 78-99 % of their sample rate, as the simulation does.
+- **Wood adds bias but no measurable scatter**, in reality and in the simulation.
+- **A direction-dependent bias hides the received-power bias.** Distance alone gives a slope of 0.04 cm/dB real against 0.98 simulated. Each anchor has a repeatable bias that depends on the direction to the tag, and removing it raises the real slope to 0.61 cm/dB (green in Figure 4; each flight is corrected with a fit on the others, and individual flights range from 0.22 to 0.90). So the received-power bias is still there, including on blocked legs, as the simulation assumes. The direction-dependent bias isn't specific to NLOS: it's also present in the LOS flights, at a similar size. It's less visible there because its effect on the slope varies between anchor installations, and the LOS figure pools several installations, so it mostly averages out, while these flights come from a single one. It isn't a fixed property of the hardware: it changes when the same anchor is reinstalled and when obstacles are added, so it seems to depend on each anchor's mounting and surroundings (UTIL reports pose-related biases for this chip). The simulation doesn't model it, which needs further work, and it accounts for only a small part of the extra noise below (10.9 to 10.2 cm).
+- **Overall noise is about twice the simulation's**, even on unblocked links.
+- **Obstacle positions are approximate.** UTIL didn't survey them, so the simulated metal effect also depends on where they were assumed to be.
+
 ## Parameter reference
 
 | Parameter | Symbol or role | Default |
@@ -199,101 +302,6 @@ The same wall matters more the farther apart the robots are, since it eats into 
 | `random_seed` | noise/bias seed; `0` = fixed default seed | `0` |
 
 The per-material overrides aren't shown in the setup GUI (saving from it would freeze the frequency-derived rates); add them to a preset by hand.
-
-## Calibration
-
-### Eliko preset (`eliko_identification`)
-
-The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bias, robots < 10 m apart) and completed with the datasheet's 75 m maximum range and ~50 cm noise near it (see the Robot Meets Ranging workshop paper, Section II-B and Table II). With $`n = 2`$, 15 m and 75 m are 23.5 dB and 37.5 dB, so the defaults reproduce those points exactly, and the link budget sets the shape in between:
-
-| $`d`$ (m) | 5 | 10 | 15 | 30 | 45 | 60 | 70 | > 75 |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| $`\sigma`$ (cm) | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
-| $`p`$ | 0.020 | 0.020 | 0.020 | 0.037 | 0.201 | 0.641 | 0.908 | 1 |
-
-$`L_c`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04, before the scaling by $`s(L_{\max})`$). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `util_identification`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
-
-### UTIL preset (`util_identification`)
-
-Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset [Zhao et al.]: static identification recordings first, then flights through the full pipeline (PX4 SITL, Gazebo, ROS 2, offboard control).
-
-| Parameter | Value | Origin |
-| --- | --- | --- |
-| `min_noise_stddev_cm` | 4.0 | UTIL's LOS TDOA spread divided by $`\sqrt 2`$ |
-| `power_bias_cm_per_db` | 0.98 | Fitted on the LOS distance test ($`\pm`$ 0.18 cm/dB) |
-| `bias_min_cm`, `bias_max_cm` | -3.6, 3.6 | Scatter of the distance test's per-setup means |
-| `material_metal_detour_loss_db` | 20 | Assumed; reproduces the static metal shift |
-| `enable_dielectric_delay` | `false` | Over-predicted the static NLOS shifts |
-| `enable_nlos_dropout` | `false` | Metal-blocked pairs keep 78-99 % of the unblocked sample rate in UTIL's flights |
-| `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.05, 25 | Fitted on the flights; checked on held-out flights |
-
-#### Summary
-
-Results compare real and simulated TDOA errors with the Wasserstein-1 distance (W1, in cm; lower is better). *Centred* removes each setup's or anchor pair's own offset, leaving the noise shape.
-
-| Data | W1 raw | W1 centred |
-| --- | ---: | ---: |
-| Static, LOS | 2.2-5.8 | 0.6-1.2 |
-| Static, obstacle on the tag link | 2.1-9.5 | -- |
-| Flight, LOS | 3.07 | 1.75 |
-| Flight, NLOS | 7.89 | 11.38 |
-
-The simulation reproduces noise levels, the received-power bias in LOS, and the size of obstacle effects in static data. Flight data is harder: LOS matches well, while NLOS matches in shape but less well in size.
-
-#### Static data
-
-In LOS, the noise matches at every distance, at about 5-6 cm. The simulated means also follow the real drift with distance, from about +8 cm at 1 m to about -6 cm at 6.5 m. Individual setups aren't comparable, because the simulation draws random anchor offsets and the real means jump between neighbouring positions for reasons not established.
-
-![Static LOS spread against distance](images/static_spread_vs_distance.png)
-
-With an obstacle on the anchor-tag line (*anTag* in the figure), the simulation reproduces how much each material shifts the error, relative to LOS (cm):
-
-| Obstacle | Shift, real / sim | W1 |
-| --- | --- | ---: |
-| Cardboard | +0.5 / -5.2 | 6.12 |
-| Foam | -0.4 / -1.8 | 2.06 |
-| Plastic | -3.5 / -8.5 | 5.42 |
-| Wooden cabinet | -9.4 / -14.6 | 9.46 |
-| Wooden shelf | -16.8 / -16.2 | 3.27 |
-| Metal | -35.2 / -35.3 | 6.88 |
-
-![Static NLOS shift by material](images/static_material_shift.png)
-
-- **Heavier obstacles shift the error more**, in reality and in the simulation. Light materials are over-predicted by a few cm.
-- **Obstacle effects vary with placement more than from sample to sample.** Moving the same metal obstacle changes the real shift by about 15 cm, while the spread at any one placement stays near 7 cm, against 5 cm in LOS. The simulated shift varies less between placements.
-- **An obstacle between the anchors barely matters.** The real error stays within 1 cm of LOS, except for plastic at 3.5 cm. The simulation doesn't model this link.
-
-#### Flight data
-
-Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each path with a median tracking error of 3-7 cm. Anchors were carried by `static: true` robots at their surveyed positions. About 0.7 % of the real samples are corrupted, with errors of up to 120 m, and were excluded. Repeating flights with the same seed moves W1 by about 0.3 cm.
-
-**LOS.** The noise shape and the received-power bias both carry over from the static data.
-
-![LOS flights: noise shape and received-power bias](images/flights_los.png)
-
-*In both flight figures, the "pair mean" is the median error of an anchor pair; slope points use samples within 30 cm of it.*
-
-- **The received-power bias holds:** 0.77 cm/dB real against 0.94 simulated.
-- **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving outlier term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
-- **Some anchors are much noisier than others in flight.** The cause isn't known, and the simulation treats all anchors alike, so its noise is too low for the worst ones.
-- **Per-anchor offsets are larger in flight data:** about 4.5 cm against 2.1 cm simulated. Widening them fits flights better but worsens the static fit, so the static value was kept.
-
-**NLOS.** With one metal and three wooden boxes:
-
-| Link | Robust std, real / sim | Outliers, real / sim |
-| --- | --- | --- |
-| Unblocked | 13.3 / 7.3 cm | 10.4 / 3.0 % |
-| Wood | 12.2 / 6.7 cm | 8.6 / 2.9 % |
-| Metal | 34.7 / 29.3 cm | 41.9 / 27.8 % |
-
-![NLOS flights with the final calibration](images/flights_nlos.png)
-
-- **Metal is right in sign and most of its scatter, but too large.** A blocked leg reads 28 cm long in reality and 58 cm in the simulation, because simulated noise grows steeply with total loss. Reducing that effect also removed the scatter and worsened the overall fit, so it was rejected.
-- **Obstacles don't stop measurements.** Blocked links keep 78-99 % of their sample rate, as the simulation does.
-- **Wood adds bias but no measurable scatter**, in reality and in the simulation.
-- **The received-power bias disappears in this data:** 0.04 cm/dB real against 0.98 simulated. Blocked legs lose it, because their error no longer follows distance, and the simulation still applies it. Part of the loss also appears without these obstacles, for reasons not known.
-- **Overall noise is about twice the simulation's**, even on unblocked links.
-- **Obstacle positions are approximate.** UTIL didn't survey them, so the simulated metal effect also depends on where they were assumed to be.
 
 ## References
 
