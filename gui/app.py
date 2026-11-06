@@ -180,7 +180,6 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("enable_material_attenuation", False),
             ("carrier_frequency_ghz", 4.0),
             ("material_metal_detour_loss_db", 20.0),
-            ("material_metal_detour_bias_cm", 0.0),
             ("enable_dielectric_delay", False),
         ]),
         ("Additive noise mean and persistent bias.", [

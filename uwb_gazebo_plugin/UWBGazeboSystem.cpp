@@ -112,7 +112,7 @@ constexpr double kPositiveEpsilon = 1e-6;
 
   // The one conductor in the material table: it isn't penetrated like a
   // dielectric (no attenuation rate, no excess-delay bias); the first path
-  // detours around it instead (metalDetourLossDb_ / metalDetourBiasCm_).
+  // detours around it instead (metalDetourLossDb_).
   const std::string kConductorMaterial = "metal";
 
   // How a material's attenuation rate is derived from the carrier frequency.
@@ -200,7 +200,7 @@ constexpr double kPositiveEpsilon = 1e-6;
     double materialLengthM{0.0};       // total tagged-material chord length
     double pathLossDb{0.0};            // L_d = 10 n log10(d)
     double obstacleLossDb{0.0};        // L_obs: walls, materials, bodies
-    double biasCm{0.0};                // beta: excess delay + metal detour + power bias
+    double biasCm{0.0};                // beta: excess delay + power bias
     bool isNlos{false};
     bool moving{false};                // the tag or the anchor moved
     double dropoutProbability{0.0};
@@ -209,18 +209,6 @@ constexpr double kPositiveEpsilon = 1e-6;
 
   // Smallest step between updates that counts as moving.
   constexpr double kMovingMinStepM = 0.01;
-
-  // Parameters of the previous (severity-curve) model. They no longer
-  // exist; Configure() says so rather than silently ignoring an old preset.
-  const char *const kRemovedParameters[] = {
-      "los_dropout_start_distance_m", "los_dropout_end_distance_m",
-      "los_hard_dropout_distance_m", "los_stddev_start_distance_m",
-      "los_stddev_end_distance_m", "los_max_thickness_m",
-      "soft_nlos_max_thickness_m", "blackout_thickness_m", "hard_nlos_gap_ratio",
-      "max_dropout_probability", "nlos_dropout_thickness_extra_weight",
-      "nlos_stddev_thickness_extra_weight", "nlos_dropout_material_extra_weight",
-      "nlos_stddev_material_extra_weight", "material_los_max_severity",
-      "material_attenuation_default"};
 }  // namespace
 
 double UWBGazeboSystem::PathLossDb(const double _distanceM) const
@@ -260,10 +248,7 @@ void UWBGazeboSystem::ComputeObstacleEffects(
   // Applied once per link, however many metal obstacles it crosses: the
   // first path detours around the whole obstruction.
   if (crossesConductor)
-  {
     _lossDb += this->metalDetourLossDb_;
-    _biasCm += this->metalDetourBiasCm_;
-  }
 }
 
 double UWBGazeboSystem::ComputeNoiseStddevCm(const double _lossDb) const
@@ -323,7 +308,6 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
   clampNonNegative(this->nlosMinLossDb_, "nlos_min_loss_db");
   clampNonNegative(this->bodyShadowMaxLossDb_, "body_shadow_max_loss_db");
   clampNonNegative(this->metalDetourLossDb_, "material_metal_detour_loss_db");
-  clampNonNegative(this->metalDetourBiasCm_, "material_metal_detour_bias_cm");
   clampNonNegative(this->movingOutlierProbability_, "moving_outlier_probability");
   clampNonNegative(this->movingOutlierMeanCm_, "moving_outlier_mean_cm");
   this->movingOutlierProbability_ = std::min(this->movingOutlierProbability_, 1.0);
@@ -463,17 +447,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readBool("enable_material_attenuation", this->enableMaterialAttenuation_);
   readDouble("carrier_frequency_ghz", this->carrierFrequencyGhz_);
   readDouble("material_metal_detour_loss_db", this->metalDetourLossDb_);
-  readDouble("material_metal_detour_bias_cm", this->metalDetourBiasCm_);
   readBool("enable_dielectric_delay", this->enableDielectricDelay_);
-
-  for (const char *removed : kRemovedParameters)
-  {
-    if (_sdf && _sdf->HasElement(removed))
-    {
-      gzwarn << "[UWBGazeboSystem] " << removed << " is no longer used (the model is now a "
-                "link budget; see README.md, \"Measurement model\"). Ignoring it.\n";
-    }
-  }
 
   this->ValidateAndNormalizeParameters();
 
@@ -494,11 +468,6 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         props.attenuationDbPerM = _sdf->Get<double>(prefix + "_attenuation_db_per_m");
       if (_sdf && _sdf->HasElement(prefix + "_permittivity"))
         props.permittivity = _sdf->Get<double>(prefix + "_permittivity");
-      if (_sdf && _sdf->HasElement(prefix + "_penetration_m"))
-      {
-        gzwarn << "[UWBGazeboSystem] " << prefix << "_penetration_m is no longer used "
-                  "(replaced by " << prefix << "_attenuation_db_per_m). Ignoring it.\n";
-      }
 
       if (props.attenuationDbPerM < 0.0)
       {
@@ -532,8 +501,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
       const auto &props = this->materials_.at(names[i]);
       materialSummary << (i ? ", " : "") << names[i];
       if (names[i] == kConductorMaterial)
-        materialSummary << ":{detour_loss_db=" << this->metalDetourLossDb_
-                        << ", detour_bias_cm=" << this->metalDetourBiasCm_ << "}";
+        materialSummary << ":{detour_loss_db=" << this->metalDetourLossDb_ << "}";
       else
         materialSummary << ":{dB_per_m=" << props.attenuationDbPerM
                         << ", eps_r=" << props.permittivity << "}";

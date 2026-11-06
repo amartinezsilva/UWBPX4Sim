@@ -62,15 +62,14 @@ While either end of a link moves (more than 1 cm between updates), that link ind
 
 ## Deterministic bias
 
-Each link also carries a deterministic range bias $`\beta`$ from three sources:
+Each link also carries a deterministic range bias $`\beta`$ from two sources:
 
 ```math
-\beta = \underbrace{\sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right)}_{\text{dielectric delay}} + \underbrace{\beta_{\text{metal}}\, \mathbf{1}[\ell_{\text{metal}} > 0]}_{\text{metal detour}} + \underbrace{k_P \left(L - L_P\right)}_{\text{received power}}
+\beta = \underbrace{\sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right)}_{\text{dielectric delay}} + \underbrace{k_P \left(L - L_P\right)}_{\text{received power}}
 ```
 
 - **Dielectric delay** -- a dielectric slows the signal to $`c/\sqrt{\varepsilon_r}`$ ($`\varepsilon_{r,m}`$ = `material_<name>_permittivity`). **Off by default** (`enable_dielectric_delay: false`): it holds for solid slabs, but on UTIL's NLOS data, where the obstacles are mostly-hollow objects represented as solid boxes, it over-predicts their shifts. `generic` has $`\varepsilon_r = 1`$ (no delay) even when enabled, since an untagged obstacle's real material is unknown.
-- **Metal detour** -- an optional fixed bias $`\beta_{\text{metal}}`$ = `material_metal_detour_bias_cm` once per link crossing metal, **0 by default**: on UTIL's NLOS data the detour loss's own power bias and NLOS folding already reproduce metal's shift (-34.2 cm predicted vs -35.2 cm real), and a bias on top double-counts it.
-- **Received power** -- the DW1000's timestamp has a bias that varies with received signal level, weaker signals reading longer (Decawave application note APS011, Section 3 and Table 2). It's modelled as linear in the loss, $`k_P`$ = `power_bias_cm_per_db` per dB relative to $`L_P`$ = `power_bias_ref_loss_db`; in TDOA, $`L_P`$ cancels between the two legs and only $`k_P`$ matters. Off by default; `util_identification` fits $`k_P`$ from UTIL's LOS distance test. APS011's curve saturates, so the linear form holds only over the fitted range (1-6.5 m).
+- **Received power** -- this is also how metal shifts a measurement: it has no bias of its own, because on UTIL's NLOS data the detour loss's power bias and NLOS folding already reproduce metal's shift (-34.2 cm predicted vs -35.2 cm real). The DW1000's timestamp has a bias that varies with received signal level, weaker signals reading longer (Decawave application note APS011, Section 3 and Table 2). It's modelled as linear in the loss, $`k_P`$ = `power_bias_cm_per_db` per dB relative to $`L_P`$ = `power_bias_ref_loss_db`; in TDOA, $`L_P`$ cancels between the two legs and only $`k_P`$ matters. Off by default; `util_identification` fits $`k_P`$ from UTIL's LOS distance test. APS011's curve saturates, so the linear form holds only over the fitted range (1-6.5 m).
 
 ## TWR measurement
 
@@ -125,7 +124,7 @@ Attenuation rates $`\alpha`$ (dB/m) at DW1000 channels 2 and 5, and relative per
 | `plastic` | 2.50 | 5.8 | 9.3 | $`\tan\delta = 0.01`$ |
 | `cardboard` | 1.20 | 1.2 | 1.9 | $`\tan\delta = 0.003`$ (mostly air) |
 | `foam` | 1.05 | 0.2 | 0.3 | $`\tan\delta = 0.0005`$ |
-| `metal` | -- | -- | -- | detour: 20 dB loss, 0 cm bias |
+| `metal` | -- | -- | -- | detour: 20 dB loss |
 
 The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss aren't from a standard: they're assumptions, tested on UTIL's NLOS objects and flights. Some resulting links with `eliko_identification`'s noise and dropout curves, with `enable_nlos_dropout: true` to show the full budget (no deterministic bias, since that preset has no power bias and the delay and detour bias are off):
 
@@ -148,7 +147,7 @@ The same wall matters more the farther apart the robots are, since it eats into 
 ## Limitations
 
 - Box collisions are intersected exactly, including rotated ones; any other collision shape (meshes, cylinders, ...) falls back to its link's world-axis-aligned bounding box, which over-estimates the blocked length.
-- One straight ray per link: no explicit multipath, and no diffraction around obstacle edges (the metal detour loss and bias are constants, not computed from geometry). The moving-tag outliers are a statistical stand-in, the same for every anchor and uncorrelated in time.
+- One straight ray per link: no explicit multipath, and no diffraction around obstacle edges (the metal detour loss is a constant, not computed from geometry). The moving outliers are a statistical stand-in, the same for every anchor and uncorrelated in time.
 - Overlapping obstacles of *different* materials each count their own chord length.
 - The outlier-heavy behaviour UTIL shows behind some plastic and cabinet obstacles (mostly accurate readings with occasional large misses) isn't modelled.
 - The TDOA reference anchor is fixed (lowest id), and clock synchronisation between anchors isn't simulated.
@@ -182,7 +181,7 @@ The same wall matters more the farther apart the robots are, since it eats into 
 | `carrier_frequency_ghz` | $`f`$ (DW1000 channel 2) | `4.0` |
 | `material_<name>_attenuation_db_per_m` | $`\alpha_m`$ override (any material but `metal`) | from $`f`$, see [Material table](#material-table) |
 | `material_<name>_permittivity` | $`\varepsilon_{r,m}`$ override (any material but `metal`) | see [Material table](#material-table) |
-| `material_metal_detour_loss_db`, `material_metal_detour_bias_cm` | $`L_{\text{metal}}`$, $`\beta_{\text{metal}}`$ | `20.0`, `0.0` |
+| `material_metal_detour_loss_db` | $`L_{\text{metal}}`$ | `20.0` |
 | `enable_dielectric_delay` | dielectric-delay term on/off | `false` |
 | **Persistent bias** | | |
 | `apply_pair_bias` | persistent bias on/off | `false` |
@@ -215,7 +214,7 @@ Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-
 | `power_bias_cm_per_db` | 0.98 | Fitted on the LOS distance test ($`\pm`$ 0.18 cm/dB) |
 | `bias_min_cm`, `bias_max_cm` | -3.6, 3.6 | Scatter of the distance test's per-setup means |
 | `material_metal_detour_loss_db` | 20 | Assumed; reproduces the static metal shift |
-| `material_metal_detour_bias_cm`, `enable_dielectric_delay` | 0, `false` | Both over-predicted the static NLOS shifts |
+| `enable_dielectric_delay` | `false` | Over-predicted the static NLOS shifts |
 | `enable_nlos_dropout` | `false` | Metal-blocked pairs keep 78-99 % of the unblocked sample rate in UTIL's flights |
 | `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.05, 25 | Fitted on the flights; checked on held-out flights |
 

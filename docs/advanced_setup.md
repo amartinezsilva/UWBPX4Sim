@@ -364,7 +364,6 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <enable_material_attenuation>false</enable_material_attenuation>
   <carrier_frequency_ghz>4.0</carrier_frequency_ghz>
   <material_metal_detour_loss_db>20.0</material_metal_detour_loss_db>
-  <material_metal_detour_bias_cm>0.0</material_metal_detour_bias_cm>
   <enable_dielectric_delay>false</enable_dielectric_delay>
   <!-- Optional per-material overrides (defaults: see "Material table"), e.g.: -->
   <!-- <material_concrete_attenuation_db_per_m>97.7</material_concrete_attenuation_db_per_m> -->

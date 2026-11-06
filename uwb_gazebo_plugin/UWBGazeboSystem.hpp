@@ -57,8 +57,7 @@ private:
   /// each material (untagged obstacles count as "generic").
   /// \details Loss is sum_m alpha_m l_m, plus metalDetourLossDb_ once if any
   /// metal is crossed. Bias is the dielectrics' excess delay,
-  /// sum_m l_m (sqrt(eps_m) - 1) (only with enableDielectricDelay_), plus
-  /// metalDetourBiasCm_ once if any metal is crossed.
+  /// sum_m l_m (sqrt(eps_m) - 1) (only with enableDielectricDelay_).
   /// \param[in] materialLengthM Chord length through each material, in meters.
   /// \param[out] lossDb Obstacle loss, in dB.
   /// \param[out] biasCm Deterministic material bias, in centimeters.
@@ -164,13 +163,11 @@ private:
   // evaluated (DW1000 channel 2 by default, as used by Eliko KIO and
   // Bitcraze LPS).
   double carrierFrequencyGhz_{4.0};
-  // Loss and range bias added once to a link crossing any metal: the first
-  // path detours around the conductor instead of going through it. The
-  // bias defaults to 0: on UTIL's NLOS data, the detour loss's own power
-  // bias and NLOS folding already reproduce metal's shift, and a bias on
-  // top double-counts it.
+  // Loss added once to a link crossing any metal: the first path detours
+  // around the conductor instead of going through it. It has no bias of its
+  // own: on UTIL's NLOS data this loss's power bias and NLOS folding already
+  // reproduce metal's shift.
   double metalDetourLossDb_{20.0};
-  double metalDetourBiasCm_{0.0};
   // Excess delay l (sqrt(eps_r) - 1) of propagating through dielectrics.
   // Off by default: correct for solid slabs, but UTIL's NLOS objects are
   // mostly air and it over-predicts their shifts (decision 2.7).

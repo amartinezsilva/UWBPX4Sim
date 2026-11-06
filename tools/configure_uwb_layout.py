@@ -379,8 +379,6 @@ def _parse_vehicle_layouts(
             raise ValueError(f"{entry_name} must include 'id'.")
         if "offboard" not in raw_vehicle:
             raise ValueError(f"{entry_name} must include 'offboard'.")
-        if "static" in raw_vehicle:
-            raise ValueError(f"{entry_name}: 'static' was removed. Use the top-level 'static_anchors' list instead.")
 
         vehicle_id = _to_int(raw_vehicle["id"], f"{entry_name}.id")
         if vehicle_id in seen_vehicle_ids:
