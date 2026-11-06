@@ -167,7 +167,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         ]),
         ("Dropout vs. loss.", [
             ("min_dropout_probability", 0.02),
-            ("dropout_mid_loss_db", 35.5),
+            ("dropout_center_loss_db", 35.5),
             ("dropout_width_db", 1.4),
             ("enable_nlos_dropout", True),
         ]),

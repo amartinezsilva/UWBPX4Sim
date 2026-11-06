@@ -268,13 +268,13 @@ double UWBGazeboSystem::ComputeDropoutProbability(const double _lossDb) const
 
   // Independent floor (random packet loss) and link failure as the budget
   // runs out: p = 1 - (1 - p_min)(1 - s(L) / s(L_max)), with s the logistic
-  // of (L - L50) / w. Scaling by s(L_max) makes p reach 1 exactly at L_max,
+  // of (L - L_c) / w. Scaling by s(L_max) makes p reach 1 exactly at L_max,
   // so it rises continuously into blackout.
   const auto logistic = [this](const double _loss)
   {
-    return 1.0 / (1.0 + std::exp(-(_loss - this->dropoutMidLossDb_) / this->dropoutWidthDb_));
+    return 1.0 / (1.0 + std::exp(-(_loss - this->dropoutCenterLossDb_) / this->dropoutWidthDb_));
   };
-  const double scale = logistic(this->maxLinkLossDb_);  // underflows if L_max << L50
+  const double scale = logistic(this->maxLinkLossDb_);  // underflows if L_max << L_c
   const double linkFailure = scale > 0.0 ? logistic(_lossDb) / scale : 0.0;
   return 1.0 - ((1.0 - this->minDropoutProbability_) * (1.0 - linkFailure));
 }
@@ -310,7 +310,7 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
   clampNonNegative(this->maxLinkLossDb_, "max_link_loss_db");
   clampNonNegative(this->noiseStartLossDb_, "noise_start_loss_db");
   clampNonNegative(this->noiseEndLossDb_, "noise_end_loss_db");
-  clampNonNegative(this->dropoutMidLossDb_, "dropout_mid_loss_db");
+  clampNonNegative(this->dropoutCenterLossDb_, "dropout_center_loss_db");
   clampNonNegative(this->nlosMinLossDb_, "nlos_min_loss_db");
   clampNonNegative(this->bodyShadowMaxLossDb_, "body_shadow_max_loss_db");
   clampNonNegative(this->metalDetourLossDb_, "material_metal_detour_loss_db");
@@ -418,7 +418,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readDouble("min_noise_stddev_cm", this->minNoiseStddevCm_);
   readDouble("max_noise_stddev_cm", this->maxNoiseStddevCm_);
   readDouble("min_dropout_probability", this->minDropoutProbability_);
-  readDouble("dropout_mid_loss_db", this->dropoutMidLossDb_);
+  readDouble("dropout_center_loss_db", this->dropoutCenterLossDb_);
   readDouble("dropout_width_db", this->dropoutWidthDb_);
 
   readBool("enable_nlos_dropout", this->enableNlosDropout_);
@@ -519,7 +519,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         << ", noise_loss_range_db=[" << this->noiseStartLossDb_ << ", " << this->noiseEndLossDb_ << "]"
         << ", noise_stddev_cm=[" << this->minNoiseStddevCm_ << ", " << this->maxNoiseStddevCm_ << "]"
         << ", min_dropout_probability=" << this->minDropoutProbability_
-        << ", dropout_mid_loss_db=" << this->dropoutMidLossDb_
+        << ", dropout_center_loss_db=" << this->dropoutCenterLossDb_
         << ", dropout_width_db=" << this->dropoutWidthDb_
         << ", enable_nlos_dropout=" << std::boolalpha << this->enableNlosDropout_
         << ", nlos_min_loss_db=" << this->nlosMinLossDb_

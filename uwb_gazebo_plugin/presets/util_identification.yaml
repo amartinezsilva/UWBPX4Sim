@@ -32,7 +32,7 @@ path_loss_exponent: 2.0
 max_link_loss_db: 37.5
 noise_start_loss_db: 23.5
 noise_end_loss_db: 37.5
-dropout_mid_loss_db: 35.5
+dropout_center_loss_db: 35.5
 dropout_width_db: 1.4
 
 # Noise floor: 4.0 cm per leg, from UTIL's implied single-link noise (TDOA

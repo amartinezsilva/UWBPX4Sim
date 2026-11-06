@@ -353,7 +353,7 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <noise_end_loss_db>37.5</noise_end_loss_db>
 
   <min_dropout_probability>0.02</min_dropout_probability>
-  <dropout_mid_loss_db>35.5</dropout_mid_loss_db>
+  <dropout_center_loss_db>35.5</dropout_center_loss_db>
   <dropout_width_db>1.4</dropout_width_db>
   <enable_nlos_dropout>true</enable_nlos_dropout>
 

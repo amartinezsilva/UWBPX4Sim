@@ -73,7 +73,7 @@ private:
 
   /// \brief Dropout probability for a total excess loss: a floor of
   /// min_dropout_probability combined with a logistic link-failure curve
-  /// centred on dropout_mid_loss_db and scaled to reach 1 at max_link_loss_db,
+  /// centred on dropout_center_loss_db and scaled to reach 1 at max_link_loss_db,
   /// and 1 beyond it.
   /// \return Dropout probability in the range [0, 1].
   double ComputeDropoutProbability(double lossDb) const;
@@ -119,7 +119,7 @@ private:
   double minNoiseStddevCm_{12.0};
   double maxNoiseStddevCm_{50.0};
   double minDropoutProbability_{0.02};
-  double dropoutMidLossDb_{35.5};
+  double dropoutCenterLossDb_{35.5};
   double dropoutWidthDb_{1.4};
 
   // If false, obstacles don't affect dropout (only the path loss does);

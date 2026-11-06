@@ -35,7 +35,7 @@ const PARAM_UI = {
   noise_start_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
   noise_end_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
   min_dropout_probability: { type: "slider", min: 0, max: 1, step: 0.01 },
-  dropout_mid_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
+  dropout_center_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
   dropout_width_db: { type: "slider", min: 0.1, max: 10, step: 0.1 },
   enable_nlos_dropout: { type: "bool" },
   moving_outlier_probability: { type: "slider", min: 0, max: 0.2, step: 0.005 },
