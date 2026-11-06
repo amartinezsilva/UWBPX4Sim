@@ -32,7 +32,7 @@ Values are in centimetres. The true distances are on `/uwb_gz_simulator/distance
 
    The presets are `eliko_identification` (TWR) and `util_identification` (TDOA). Without a preset, the defaults are the Eliko line-of-sight calibration in TWR mode. See the [measurement model](../../docs/measurement_model.md) for every parameter.
 
-2. Add links named `uwb_tag_<id>` and `uwb_anchor_<id>` to your robots, or to a static model for fixed anchors. Ids are integers, unique among tags and unique among anchors. On a moving robot, attach each one with a fixed joint. The `uwb_tag_eliko.stl` and `uwb_anchor_eliko.stl` meshes in [`models/uwb_meshes/`](../../models/uwb_meshes/) are optional.
+2. Add links named `uwb_tag_<id>` and `uwb_anchor_<id>` to your robots, or to a static model for fixed anchors. Ids are integers, unique among tags and unique among anchors. On a moving robot, attach each one with a fixed joint. The `uwb_tag_eliko.stl` and `uwb_anchor_eliko.stl` meshes in [`models/uwb_meshes/`](../../models/uwb_meshes/) are optional, and so are the bars and poles. They are plain `<visual>` cylinders you add to the link yourself, as in [`world.sdf`](world.sdf).
 
 3. Set `GZ_SIM_SYSTEM_PLUGIN_PATH` to the folder holding `libUWBGazeboPlugin.so`, or install it with `cmake --install build --prefix <dir>`.
 

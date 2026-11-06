@@ -49,7 +49,13 @@
         <pose>0 0 0.6 0 0 0</pose>
         <visual name="visual">
           <geometry><mesh><uri>../../models/uwb_meshes/uwb_tag_eliko.stl</uri></mesh></geometry>
-          <material><diffuse>0.96 0.55 0.13 1</diffuse></material>
+          <material><ambient>0.96 0.55 0.13 1</ambient><diffuse>0.96 0.55 0.13 1</diffuse></material>
+        </visual>
+        <!-- Optional bar down to the robot, like the generated models. -->
+        <visual name="bar">
+          <pose>0 0 -0.3 0 0 0</pose>
+          <geometry><cylinder><radius>0.0035</radius><length>0.6</length></cylinder></geometry>
+          <material><ambient>0.24 0.24 0.24 1</ambient><diffuse>0.24 0.24 0.24 1</diffuse></material>
         </visual>
       </link>
     </model>
@@ -62,14 +68,26 @@
         <pose>4 0 1.5 0 0 0</pose>
         <visual name="visual">
           <geometry><mesh><uri>../../models/uwb_meshes/uwb_anchor_eliko.stl</uri></mesh></geometry>
-          <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
+          <material><ambient>0.92 0.92 0.92 1</ambient><diffuse>0.92 0.92 0.92 1</diffuse></material>
+        </visual>
+        <!-- Optional pole down to the ground, like the generated static anchors. -->
+        <visual name="pole">
+          <pose>0 0 -0.75 0 0 0</pose>
+          <geometry><cylinder><radius>0.004</radius><length>1.5</length></cylinder></geometry>
+          <material><ambient>0.28 0.28 0.30 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
         </visual>
       </link>
       <link name="uwb_anchor_2">
         <pose>0 4 1.5 0 0 0</pose>
         <visual name="visual">
           <geometry><mesh><uri>../../models/uwb_meshes/uwb_anchor_eliko.stl</uri></mesh></geometry>
-          <material><diffuse>0.92 0.92 0.92 1</diffuse></material>
+          <material><ambient>0.92 0.92 0.92 1</ambient><diffuse>0.92 0.92 0.92 1</diffuse></material>
+        </visual>
+        <!-- Optional pole down to the ground, like the generated static anchors. -->
+        <visual name="pole">
+          <pose>0 0 -0.75 0 0 0</pose>
+          <geometry><cylinder><radius>0.004</radius><length>1.5</length></cylinder></geometry>
+          <material><ambient>0.28 0.28 0.30 1</ambient><diffuse>0.28 0.28 0.30 1</diffuse></material>
         </visual>
       </link>
     </model>
