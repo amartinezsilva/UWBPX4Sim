@@ -11,7 +11,7 @@
 
 namespace custom
 {
-/// \brief Gazebo system plugin that simulates UWB ranges between UAV tags and UGV anchors.
+/// \brief Gazebo system plugin that simulates UWB ranges between tags and anchors.
 /// \details Each tag-anchor link is evaluated with a link budget: an excess
 /// loss L (dB) from free-space path loss plus every obstacle the line of
 /// sight crosses, which sets the noise stddev and dropout probability. See
@@ -100,8 +100,8 @@ private:
   unsigned int randomSeed_{0};
 
   std::unordered_map<std::string, double> pairBiasCm_;
-  // Each tag's position at the previous update.
-  std::unordered_map<gz::sim::Entity, gz::math::Vector3d> lastTagPosition_;
+  // Each tag's and anchor's position at the previous update.
+  std::unordered_map<gz::sim::Entity, gz::math::Vector3d> lastSensorPosition_;
   std::uniform_real_distribution<double> biasCmDist_{-27.0, 20.0};
 
   // Configurable sensor model parameters (units: cm, unless noted).
@@ -125,7 +125,7 @@ private:
   // If false, obstacles don't affect dropout (only the path loss does);
   // noise still uses the full link budget.
   bool enableNlosDropout_{true};
-  // Moving tags only: each leg reads long with this probability, by an
+  // Links with a moving end only: each leg reads long with this probability, by an
   // exponential excess of this mean. 0 disables it.
   double movingOutlierProbability_{0.0};
   double movingOutlierMeanCm_{30.0};

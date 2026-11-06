@@ -222,6 +222,14 @@ for spec in "${SPAWN_SPECS[@]}"; do
   fi
 done
 
+# Static anchors are a plain Gazebo model: no PX4 instance spawns them.
+STATIC_ANCHORS_MODEL="$(python3 "$LAYOUT_TOOL" --layout "$UWB_LAYOUT_FILE" --emit-static-anchors-model)"
+if [[ -n "$STATIC_ANCHORS_MODEL" && ! -d "$PX4_GZ_MODELS_DIR/$STATIC_ANCHORS_MODEL" ]]; then
+  echo "[ERROR] Missing generated Gazebo model: $PX4_GZ_MODELS_DIR/$STATIC_ANCHORS_MODEL" >&2
+  echo "[ERROR] Re-run setup_simulator.sh to generate and install it." >&2
+  exit 1
+fi
+
 SESSION="${SESSION:-sim_session}"
 UWB_BRIDGE_CONFIG="${UWB_BRIDGE_CONFIG:-$SCRIPT_DIR/ROS2/px4_sim_offboard/config/uwb_bridge.yaml}"
 
@@ -307,6 +315,13 @@ nav_dll_cmd() {
   printf '%s' "$cmd"
 }
 
+# Retries until Gazebo answers. `gz service` exits 0 even when the call times
+# out, so success is read from the reply rather than the exit code.
+static_anchors_cmd() {
+  local req="sdf_filename: \\\"$PX4_GZ_MODELS_DIR/$STATIC_ANCHORS_MODEL/model.sdf\\\", name: \\\"$STATIC_ANCHORS_MODEL\\\", allow_renaming: false"
+  printf '%s' "echo '[INFO] Waiting for Gazebo to spawn the static anchors...' && until gz service -s /world/${GZ_WORLD}/create --reqtype gz.msgs.EntityFactory --reptype gz.msgs.Boolean --timeout 2000 --req \"$req\" 2>/dev/null | grep -q 'data: true'; do sleep 1; done && echo '[INFO] Static anchors spawned.'"
+}
+
 tmux new-window -t "$SESSION:1" -n px4
 create_window_with_panes "$SESSION:1" "${#SPAWN_SPECS[@]}"
 
@@ -342,6 +357,9 @@ tmux send-keys -t "$SESSION:2.0" "$(build_ros_shell_command "sleep 12 && cd \"$R
 tmux send-keys -t "$SESSION:2.1" "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && UWB_LAYOUT_FILE=\"$UWB_LAYOUT_FILE\" ros2 launch px4_sim_offboard offboard_launch.py")" C-m
 spawned_models_str="${SPAWNED_MODELS[*]}"
 tmux send-keys -t "$SESSION:2.2" "echo '[INFO] UWB launcher.' && echo '[INFO] Layout file: $UWB_LAYOUT_FILE' && echo '[INFO] Spawned models: $spawned_models_str' && echo '[INFO] Bridge topics should appear under /uwb_gz_simulator/distances/aItJ and /uwb_gz_simulator/distances_ground_truth/aItJ.' && echo '[INFO] Offboard nodes are configured directly from the layout YAML.'" C-m
+if [[ -n "$STATIC_ANCHORS_MODEL" ]]; then
+  tmux send-keys -t "$SESSION:2.2" "$(static_anchors_cmd)" C-m
+fi
 
 if (( DETACH )); then
   echo "[INFO] Simulation running detached in tmux session '$SESSION' (stop: tmux kill-session -t $SESSION)."

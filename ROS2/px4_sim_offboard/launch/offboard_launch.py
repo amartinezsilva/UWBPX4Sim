@@ -77,6 +77,22 @@ def generate_launch_description():
             )
         )
 
+    # Static anchors belong to no robot, so no offboard node publishes their TF.
+    for anchor in layout.static_anchors:
+        x, y, z = anchor.position
+        actions.append(
+            Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name=f'static_anchor_{anchor.id}_tf',
+                arguments=[
+                    '--x', str(x), '--y', str(y), '--z', str(z),
+                    '--frame-id', 'map',
+                    '--child-frame-id', f'static_anchors/a{anchor.id}',
+                ],
+            )
+        )
+
     actions.append(
         Node(
             package='px4_sim_offboard',

@@ -202,13 +202,13 @@ constexpr double kPositiveEpsilon = 1e-6;
     double obstacleLossDb{0.0};        // L_obs: walls, materials, bodies
     double biasCm{0.0};                // beta: excess delay + metal detour + power bias
     bool isNlos{false};
-    bool tagMoving{false};
+    bool moving{false};                // the tag or the anchor moved
     double dropoutProbability{0.0};
     double noiseStddevCm{0.0};
   };
 
-  // Smallest step between updates that counts as a moving tag.
-  constexpr double kMovingTagMinStepM = 0.01;
+  // Smallest step between updates that counts as moving.
+  constexpr double kMovingMinStepM = 0.01;
 
   // Parameters of the previous (severity-curve) model. They no longer
   // exist; Configure() says so rather than silently ignoring an old preset.
@@ -863,7 +863,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzerr << "[UWBGazeboSystem] Duplicate global tag id t" << tagId
 					      << " detected in '" << fullName << "' and '" << it->second
-					      << "'. Tag ids must be globally unique across all UAVs. Skipping duplicate.\n";
+					      << "'. Tag ids must be globally unique. Skipping duplicate.\n";
 				}
 				else
 				{
@@ -890,7 +890,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzerr << "[UWBGazeboSystem] Duplicate global anchor id a" << anchorId
 					      << " detected in '" << fullName << "' and '" << it->second
-					      << "'. Anchor ids must be globally unique across all UGVs. Skipping duplicate.\n";
+					      << "'. Anchor ids must be globally unique. Skipping duplicate.\n";
 				}
 				else
 				{
@@ -971,15 +971,20 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	const std::unordered_map<gz::sim::Entity, std::string> *obstacleMaterialsPtr =
 		this->enableMaterialAttenuation_ ? &obstacleMaterials : nullptr;
 
-	// Which tags moved since the last update (for the moving-tag outliers).
-	std::unordered_map<gz::sim::Entity, bool> tagMoving;
-	for (const auto &[tagName, tagEntity] : tags)
+	// Which tags and anchors moved since the last update (for the moving
+	// outliers). UTIL's anchors never move, so its data can't tell tag motion
+	// from relative motion: either end moving counts.
+	std::unordered_map<gz::sim::Entity, bool> sensorMoving;
+	for (const auto *sensors : {&tags, &anchors})
 	{
-		const gz::math::Vector3d tagPos = computeWorldPose(tagEntity, ecm).Pos();
-		const auto last = this->lastTagPosition_.find(tagEntity);
-		tagMoving[tagEntity] = last != this->lastTagPosition_.end() &&
-		                       tagPos.Distance(last->second) > kMovingTagMinStepM;
-		this->lastTagPosition_[tagEntity] = tagPos;
+		for (const auto &[sensorName, sensorEntity] : *sensors)
+		{
+			const gz::math::Vector3d sensorPos = computeWorldPose(sensorEntity, ecm).Pos();
+			const auto last = this->lastSensorPosition_.find(sensorEntity);
+			sensorMoving[sensorEntity] = last != this->lastSensorPosition_.end() &&
+			                             sensorPos.Distance(last->second) > kMovingMinStepM;
+			this->lastSensorPosition_[sensorEntity] = sensorPos;
+		}
 	}
 
 	// Geometry + link budget of one tag-anchor link: what the ray crosses,
@@ -994,7 +999,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	{
 		LinkState link;
 		link.distanceM = _tagPos.Distance(_anchorPos);
-		link.tagMoving = tagMoving.at(_tagEntity);
+		link.moving = sensorMoving.at(_tagEntity) || sensorMoving.at(_anchorEntity);
 
 		const BlockedPath wallPath =
 			computeAabbBlockedPath(_tagPos, _anchorPos, obstacleLinks, _tagEntity, _anchorEntity,
@@ -1042,7 +1047,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		if (_link.isNlos && noiseCm < 0.0)
 			noiseCm = -noiseCm;
 		// Occasional late first path, seen only on moving tags in UTIL's data.
-		if (_link.tagMoving && this->movingOutlierProbability_ > 0.0 &&
+		if (_link.moving && this->movingOutlierProbability_ > 0.0 &&
 		    std::bernoulli_distribution(this->movingOutlierProbability_)(this->rng_))
 		{
 			noiseCm += std::exponential_distribution<double>(1.0 / this->movingOutlierMeanCm_)(this->rng_);

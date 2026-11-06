@@ -302,17 +302,10 @@ AGVOffboardControl::AGVOffboardControl()
         anchor_ids_[anchor_key] = anchor_key.size() > 1 ? anchor_key.substr(1) : anchor_key;
     }
 
-    if (anchor_keys_.empty() || !loaded_dynamic_tags) {
-        RCLCPP_FATAL(
-            this->get_logger(),
-            "Invalid UWB config. Required params: anchors and tags.ids.");
-        throw std::runtime_error("Missing required dynamic anchor/tag ID parameters.");
-    }
-
-    if (anchor_keys_.empty() || tag_keys_.empty()) {
-        RCLCPP_FATAL(this->get_logger(), "Invalid UWB config: loaded %zu anchors and %zu tags.",
-                     anchor_keys_.size(), tag_keys_.size());
-        throw std::runtime_error("Empty anchor/tag configuration for AGV offboard control.");
+    // tags.ids lists every tag in the fleet. This UGV's own anchors may be none.
+    if (!loaded_dynamic_tags) {
+        RCLCPP_FATAL(this->get_logger(), "Invalid UWB config. Required param: tags.ids.");
+        throw std::runtime_error("Missing required tag ID parameters.");
     }
 
     uwb_topic_names_.clear();
@@ -349,25 +342,27 @@ AGVOffboardControl::AGVOffboardControl()
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
    
-    // Publish static transforms for anchors (relative to agv/base_link)
-    for (const auto& anchor : anchor_keys_) {
-        std::vector<double> anchor_pos;
-        const std::string anchor_numeric = anchor.size() > 1 ? anchor.substr(1) : anchor;
-        const std::string compact_param = "anchors." + anchor_numeric + ".position";
-        const bool loaded = this->get_parameter(compact_param, anchor_pos) && anchor_pos.size() == 3;
-        if (loaded) {
-            geometry_msgs::msg::TransformStamped tf;
-            tf.header.stamp = this->get_clock()->now();
-            tf.header.frame_id = frame_prefix_ + "/base_link";
-            tf.child_frame_id = frame_prefix_ + "/" + anchor;
-            tf.transform.translation.x = anchor_pos[0];
-            tf.transform.translation.y = anchor_pos[1];
-            tf.transform.translation.z = anchor_pos[2];
-            tf.transform.rotation.x = 0.0;
-            tf.transform.rotation.y = 0.0;
-            tf.transform.rotation.z = 0.0;
-            tf.transform.rotation.w = 1.0;
-            static_tf_broadcaster_->sendTransform(tf);
+    // Publish static transforms for this robot's tags and anchors (relative to
+    // agv/base_link). It may carry either, or both.
+    for (const auto &[ns, key_prefix] : {std::pair<std::string, std::string>{"tags", "t"}, {"anchors", "a"}}) {
+        const auto sensors = this->list_parameters({ns}, 10);
+        for (const auto &key : directSensorKeysFromPrefixes(sensors.prefixes, ns, key_prefix)) {
+            std::vector<double> sensor_pos;
+            const std::string compact_param = ns + "." + key.substr(1) + ".position";
+            if (this->get_parameter(compact_param, sensor_pos) && sensor_pos.size() == 3) {
+                geometry_msgs::msg::TransformStamped tf;
+                tf.header.stamp = this->get_clock()->now();
+                tf.header.frame_id = frame_prefix_ + "/base_link";
+                tf.child_frame_id = frame_prefix_ + "/" + key;
+                tf.transform.translation.x = sensor_pos[0];
+                tf.transform.translation.y = sensor_pos[1];
+                tf.transform.translation.z = sensor_pos[2];
+                tf.transform.rotation.x = 0.0;
+                tf.transform.rotation.y = 0.0;
+                tf.transform.rotation.z = 0.0;
+                tf.transform.rotation.w = 1.0;
+                static_tf_broadcaster_->sendTransform(tf);
+            }
         }
     }
    

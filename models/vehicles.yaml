@@ -4,8 +4,9 @@
 # Each type generates one Gazebo model per robot, named `<type>_<id>`
 # (e.g. x500_0, r1_rover_0), from a template plus the layout's UWB links.
 #
-#   role          uav -> listed under `uavs:`, carries UWB tags, driven by uav_offboard_control
-#                 ugv -> listed under `ugvs:`, carries UWB anchors, driven by agv_offboard_control
+#   role          uav -> listed under `uavs:`, driven by uav_offboard_control
+#                 ugv -> listed under `ugvs:`, driven by agv_offboard_control
+#                 Either role can carry UWB tags, anchors or both.
 #   px4_model     template taken from <PX4-Autopilot>/Tools/simulation/gz/models/<px4_model>.
 #                 Preferred: sensors and noise always match the PX4/Gazebo version installed.
 #   template_dir  alternative to px4_model for a vehicle PX4 doesn't ship: a model directory

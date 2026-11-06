@@ -14,7 +14,7 @@ A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot
 
 - **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance and by the obstacles in the way, including their material. See [Measurement model](docs/measurement_model.md).
 - **Calibrated presets**: `eliko_identification` (Eliko, TWR) and `util_identification` (UTIL dataset, TDOA). Tune one and save your own from the setup GUI.
-- **Multi-robot layouts** from one YAML file: UAVs with tags, UGVs with anchors. Vehicle models and the ROS 2 bridge are generated from it.
+- **Multi-robot layouts** from one YAML file: UAVs and UGVs carrying any mix of tags and anchors, plus anchors fixed in the world. Vehicle models and the ROS 2 bridge are generated from it.
 - **Guided setup** with a browser GUI, and a one-command **launcher**.
 - **ROS 2 offboard nodes** that fly the UAVs and drive the UGVs along CSV trajectories.
 
@@ -64,9 +64,12 @@ ugvs:
     anchors:
       - id: 1
         position: [-0.32, 0.3, 0.875]
+static_anchors:                                            # optional, not on a robot
+  - id: 5
+    position: [4.0, 2.0, 2.5]                              # in world coordinates
 ```
 
-Tag ids must be unique across all UAVs, and anchor ids across all UGVs. See [`config/`](config/) for complete examples. Build layouts from the setup GUI or edit the files directly, then run setup again.
+Any robot can carry `tags`, `anchors` or both. Tag ids must be unique across the layout, and so must anchor ids. `uavs` and `ugvs` are optional, as long as there is at least one tag and one anchor. See [`config/`](config/) for complete examples. Build layouts from the setup GUI or edit the files directly, then run setup again.
 
 To mark an obstacle's material, add a `__material_<name>` suffix to its model name in the world, e.g. `wall_1__material_concrete`.
 
@@ -77,7 +80,7 @@ To mark an obstacle's material, add a `__material_<name>` suffix to its model na
 | TWR | `/uwb_gz_simulator/distances/aItJ` | `/uwb_gz_simulator/distances_ground_truth/aItJ` |
 | TDOA | `/uwb_gz_simulator/tdoa/aIaKtJ` | `/uwb_gz_simulator/tdoa_ground_truth/aIaKtJ` |
 
-`I` and `K` are anchor ids (`I` is the TDOA reference) and `J` is the tag id. Each robot also publishes `/<prefix>/odom` and `/<prefix>/gt`, with prefix `uav_<id>` or `ugv_<id>`.
+`I` and `K` are anchor ids (`I` is the TDOA reference, the lowest anchor id) and `J` is the tag id. All of these topics are bridged to ROS 2, but only the active mode publishes. Each robot also publishes `/<prefix>/odom` and `/<prefix>/gt`, with prefix `uav_<id>` or `ugv_<id>`.
 
 ## Documentation
 

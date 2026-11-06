@@ -165,19 +165,6 @@ public:
 
 		this->get_parameter("cruise_speed", cruise_speed_);
 
-		const auto listed = this->list_parameters({"tags"}, 10);
-		tag_keys_ = directSensorKeysFromPrefixes(listed.prefixes, "tags", "t");
-		if (tag_keys_.empty()) {
-			throw std::runtime_error("Missing tag configuration under 'tags'.");
-		}
-		for (const auto &tag_key : tag_keys_) {
-			const std::string tag_numeric = tag_key.size() > 1 ? tag_key.substr(1) : tag_key;
-			const std::string compact_param = "tags." + tag_numeric + ".position";
-			if (!this->has_parameter(compact_param)) {
-				throw std::runtime_error("Missing tag position parameter: " + compact_param);
-			}
-		}
-
 		pos_scale_err_ = odom_error_position_ / 100.0;
 		yaw_scale_err_ = odom_error_angle_   / 100.0;
 
@@ -227,24 +214,26 @@ public:
 		// Set QoS to match PX4 publisher
 		rclcpp::QoS qos_profile = rclcpp::SensorDataQoS();
 
-		for (const auto& tag : tag_keys_) {
-			std::vector<double> tag_pos;
-			const std::string tag_numeric = tag.size() > 1 ? tag.substr(1) : tag;
-			const std::string compact_param = "tags." + tag_numeric + ".position";
-			const bool loaded = this->get_parameter(compact_param, tag_pos) && tag_pos.size() == 3;
-			if (loaded) {
-				geometry_msgs::msg::TransformStamped tf;
-				tf.header.stamp = this->get_clock()->now();
-				tf.header.frame_id = frame_prefix_ + "/base_link";
-				tf.child_frame_id = frame_prefix_ + "/" + tag;
-				tf.transform.translation.x = tag_pos[0];
-				tf.transform.translation.y = tag_pos[1];
-				tf.transform.translation.z = tag_pos[2];
-				tf.transform.rotation.x = 0.0;
-				tf.transform.rotation.y = 0.0;
-				tf.transform.rotation.z = 0.0;
-				tf.transform.rotation.w = 1.0;
-				static_tf_broadcaster_->sendTransform(tf);
+		// This robot may carry tags, anchors or both.
+		for (const auto &[ns, key_prefix] : {std::pair<std::string, std::string>{"tags", "t"}, {"anchors", "a"}}) {
+			const auto listed = this->list_parameters({ns}, 10);
+			for (const auto &key : directSensorKeysFromPrefixes(listed.prefixes, ns, key_prefix)) {
+				std::vector<double> sensor_pos;
+				const std::string compact_param = ns + "." + key.substr(1) + ".position";
+				if (this->get_parameter(compact_param, sensor_pos) && sensor_pos.size() == 3) {
+					geometry_msgs::msg::TransformStamped tf;
+					tf.header.stamp = this->get_clock()->now();
+					tf.header.frame_id = frame_prefix_ + "/base_link";
+					tf.child_frame_id = frame_prefix_ + "/" + key;
+					tf.transform.translation.x = sensor_pos[0];
+					tf.transform.translation.y = sensor_pos[1];
+					tf.transform.translation.z = sensor_pos[2];
+					tf.transform.rotation.x = 0.0;
+					tf.transform.rotation.y = 0.0;
+					tf.transform.rotation.z = 0.0;
+					tf.transform.rotation.w = 1.0;
+					static_tf_broadcaster_->sendTransform(tf);
+				}
 			}
 		}
 
@@ -672,7 +661,6 @@ private:
 	std::string frame_prefix_{"uav"};
 	std::string world_frame_id_{"map"};
 	std::string marker_array_topic_{"/uav/gt_marker_array"};
-	std::vector<std::string> tag_keys_;
 
 	std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 	std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;

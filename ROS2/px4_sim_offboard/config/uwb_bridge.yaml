@@ -19,17 +19,8 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances/a2t1"
-  gz_topic_name: "/uwb_gz_simulator/distances/a2t1"
-  ros_type_name: "std_msgs/msg/Float64"
-  gz_type_name: "gz.msgs.Double"
-  subscriber_queue: 10
-  publisher_queue: 10
-  lazy: false
-  direction: GZ_TO_ROS
-
-- ros_topic_name: "/uwb_gz_simulator/distances/a2t2"
-  gz_topic_name: "/uwb_gz_simulator/distances/a2t2"
+- ros_topic_name: "/uwb_gz_simulator/distances/a1t4"
+  gz_topic_name: "/uwb_gz_simulator/distances/a1t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10
@@ -55,8 +46,8 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances/a4t1"
-  gz_topic_name: "/uwb_gz_simulator/distances/a4t1"
+- ros_topic_name: "/uwb_gz_simulator/distances/a3t4"
+  gz_topic_name: "/uwb_gz_simulator/distances/a3t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10
@@ -64,8 +55,26 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances/a4t2"
-  gz_topic_name: "/uwb_gz_simulator/distances/a4t2"
+- ros_topic_name: "/uwb_gz_simulator/distances/a5t1"
+  gz_topic_name: "/uwb_gz_simulator/distances/a5t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/distances/a5t2"
+  gz_topic_name: "/uwb_gz_simulator/distances/a5t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/distances/a5t4"
+  gz_topic_name: "/uwb_gz_simulator/distances/a5t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10
@@ -93,17 +102,8 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a2t1"
-  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a2t1"
-  ros_type_name: "std_msgs/msg/Float64"
-  gz_type_name: "gz.msgs.Double"
-  subscriber_queue: 10
-  publisher_queue: 10
-  lazy: false
-  direction: GZ_TO_ROS
-
-- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a2t2"
-  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a2t2"
+- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a1t4"
+  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a1t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10
@@ -129,8 +129,8 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a4t1"
-  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a4t1"
+- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a3t4"
+  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a3t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10
@@ -138,8 +138,138 @@
   lazy: false
   direction: GZ_TO_ROS
 
-- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a4t2"
-  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a4t2"
+- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t1"
+  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t2"
+  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t4"
+  gz_topic_name: "/uwb_gz_simulator/distances_ground_truth/a5t4"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+# UWB TDOA topic bridges (GZ_TO_ROS only)
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a3t1"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a3t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a3t2"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a3t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a3t4"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a3t4"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a5t1"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a5t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a5t2"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a5t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa/a1a5t4"
+  gz_topic_name: "/uwb_gz_simulator/tdoa/a1a5t4"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+# UWB TDOA ground-truth topic bridges (GZ_TO_ROS only)
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t1"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t2"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t4"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a3t4"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t1"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t1"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t2"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t2"
+  ros_type_name: "std_msgs/msg/Float64"
+  gz_type_name: "gz.msgs.Double"
+  subscriber_queue: 10
+  publisher_queue: 10
+  lazy: false
+  direction: GZ_TO_ROS
+
+- ros_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t4"
+  gz_topic_name: "/uwb_gz_simulator/tdoa_ground_truth/a1a5t4"
   ros_type_name: "std_msgs/msg/Float64"
   gz_type_name: "gz.msgs.Double"
   subscriber_queue: 10

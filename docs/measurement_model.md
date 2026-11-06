@@ -1,6 +1,6 @@
 # Measurement model
 
-The `UWBGazeboPlugin` system simulates UWB measurements between UGV anchors and UAV tags with a **link budget**. Every 100 ms of simulation time it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 8 dB, and a 20 cm concrete wall about 20 dB (at 4 GHz).
+The `UWBGazeboPlugin` system simulates UWB measurements between anchors and tags with a **link budget**. Every 100 ms of simulation time it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 8 dB, and a 20 cm concrete wall about 20 dB (at 4 GHz).
 
 Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The two shipped presets, `eliko_identification` (Eliko TWR, the default under `-y`) and `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset; see [Calibration](#calibration)), are read-only from the GUI: tune one and save it under a new name.
 
@@ -56,9 +56,9 @@ p =
 - $`p`$ combines an independent floor $`p_{\min}`$ = `min_dropout_probability` (random packet loss) with a logistic link failure as the budget runs out, centred on $`L_{50}`$ = `dropout_mid_loss_db` with width $`w`$ = `dropout_width_db`. Beyond $`L_{\max}`$ = `max_link_loss_db` the link is closed.
 - With `enable_nlos_dropout: false`, dropout uses $`L_d`$ only (obstacles don't drop measurements); noise still uses the full $`L`$.
 
-## Moving-tag outliers
+## Moving outliers
 
-While a tag moves (more than 1 cm between updates), each of its links independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A still tag is never affected, because UTIL's static recordings have almost no such samples while its flights do. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
+While either end of a link moves (more than 1 cm between updates), that link independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A link with both ends still is never affected, because UTIL's static recordings have almost no such samples while its flights do. UTIL's anchors never move, so applying this to moving anchors is an extrapolation. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
 
 ## Deterministic bias
 
@@ -266,7 +266,7 @@ Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each
 *In both flight figures, the "pair mean" is the median error of an anchor pair; slope points use samples within 30 cm of it.*
 
 - **The received-power bias holds:** 0.77 cm/dB real against 0.94 simulated.
-- **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving-tag term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
+- **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving outlier term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
 - **Some anchors are much noisier than others in flight.** The cause isn't known, and the simulation treats all anchors alike, so its noise is too low for the worst ones.
 - **Per-anchor offsets are larger in flight data:** about 4.5 cm against 2.1 cm simulated. Widening them fits flights better but worsens the static fit, so the static value was kept.
 

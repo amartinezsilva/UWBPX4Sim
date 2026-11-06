@@ -8,7 +8,7 @@ How to run without Docker, and reference for the layout file, the manual install
 - `models/uwb_meshes/`: UWB tag/anchor meshes added to the generated models
 - `models/custom_models/`: auto-generated per-robot UAV and UGV models with the desired UWB transceiver layouts
 - `ROS2/px4_sim_offboard/`: ROS 2 package for the PX4/Gazebo bridge and offboard-side nodes
-- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs (the file in the repository is just a sample)
+- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs, in both TWR and TDOA (the file in the repository is just a sample)
 - `config/`: layout YAML files used for model generation and simulator spawning
 - `setup_simulator.sh`: guided setup script (models, plugin, plugin parameters, optional world, optional PX4 rebuild, ROS 2 workspace checks)
 - `simulator_launcher.sh`: tmux-based PX4 SITL launcher
@@ -140,14 +140,14 @@ The vehicle types a layout can use are listed in [`models/vehicles.yaml`](../mod
 
 | Type | Role | Template |
 | --- | --- | --- |
-| `x500` | `uav` (carries tags) | PX4's `x500_base`, plus the `<plugin>` blocks of PX4's `x500` |
-| `r1_rover` | `ugv` (carries anchors) | PX4's `r1_rover` |
+| `x500` | `uav` | PX4's `x500_base`, plus the `<plugin>` blocks of PX4's `x500` |
+| `r1_rover` | `ugv` | PX4's `r1_rover` |
 
 Templates are normally taken from your PX4 checkout (`<PX4-Autopilot>/Tools/simulation/gz/models`, via `px4_model`), so each robot's sensors and noise always match the PX4/Gazebo version installed. Only the UWB links and meshes are added on top.
 
 To add a vehicle type, add an entry to `models/vehicles.yaml` with its `role` (`uav` or `ugv`), its PX4 airframe (`autostart`), and either `px4_model` (a model PX4 ships) or `template_dir` (your own model directory in this repo, e.g. `models/templates/my_rover`, for vehicles PX4 doesn't ship). Then pick it per robot with `model:` in the layout, or from the setup GUI. Nothing else needs changing: the UWB plugin finds tags and anchors by their link names (`uwb_tag_<id>` / `uwb_anchor_<id>`), not by model name. A new *role* (anything that is neither a `uav` nor a `ugv`) would also need its own offboard node.
 
-Besides `uavs`/`ugvs`, the layout also accepts a top-level `world` field naming the Gazebo world to use -- either a custom one from `worlds/*.sdf`, or one PX4 already ships (e.g. `baylands`). `setup_simulator.sh` resolves it by name against PX4's own worlds directory after copying every custom world there (see [Quick start: automated setup](#automated-setup)); an unrecognized name, or omitting the field, falls back to PX4's default world. `--world` overrides it.
+Besides `uavs`, `ugvs` and `static_anchors`, the layout also accepts a top-level `world` field naming the Gazebo world to use -- either a custom one from `worlds/*.sdf`, or one PX4 already ships (e.g. `baylands`). `setup_simulator.sh` resolves it by name against PX4's own worlds directory after copying every custom world there (see [Quick start: automated setup](#automated-setup)); an unrecognized name, or omitting the field, falls back to PX4's default world. `--world` overrides it.
 
 ```yaml
 world: walls_nlos
@@ -160,7 +160,19 @@ The layout YAML is structured robot-by-robot. Each vehicle entry contains:
 
 - `spawn_pose`: a 6-vector `[x, y, z, roll, pitch, yaw]` in world coordinates
 - `offboard`: the ROS/offboard parameters for that specific robot
-- `tags` or `anchors`: the sensor placement relative to the robot body
+- `tags` and/or `anchors`: the sensor placement relative to the robot body. Any robot can carry either, or both.
+
+Anchors can also be fixed in the world instead of mounted on a robot, with the top-level `static_anchors` list:
+
+```yaml
+static_anchors:
+  - id: 5
+    position: [4.0, 2.0, 2.5]   # world coordinates, same frame as spawn_pose
+```
+
+They can be combined with mounted anchors, and anchor ids must be unique across both. `uavs` and `ugvs` may each be empty or omitted, as long as the layout has at least one tag on a robot and one anchor. Setup generates a single static model, `uwb_static_anchors`, using the same anchor mesh and a vertical pole down to the ground, and the launcher spawns it into the world without a PX4 instance. No vehicle body loss applies to these anchors. Keep wall-mounted anchors a few centimetres off the wall, since a link from inside a wall counts as crossing it.
+
+Static anchors publish the same `aItJ` pair topics as any other anchor, plus a TF `map -> static_anchors/a<id>`. Like anchors mounted on a UAV, they are not included in the aggregated `/ugv_<id>/eliko/Distances` list, which only holds that UGV's own anchors.
 
 This same YAML is used both:
 
@@ -241,8 +253,9 @@ Rules:
 
 - UAV and UGV ids are integers matching the Gazebo/PX4 model suffix (`x500_0`, `r1_rover_0`, ...). They must be unique among UAVs and among UGVs, whatever their vehicle type.
 - `spawn_pose` is expressed as `[x, y, z, roll, pitch, yaw]` in world coordinates and is used by `simulator_launcher.sh`.
-- Anchor ids are globally unique across all UGVs, and Tag ids are globally unique across all UAVs.
-- Pair topics appear encoded as `aItJ` for anchor I and tag J, so `a1t2` is globally unique by construction.
+- Anchor ids are globally unique across all robots and static anchors, and Tag ids are globally unique across all robots.
+- Pair topics appear encoded as `aItJ` for anchor I and tag J, so `a1t2` is globally unique by construction. TDOA topics use `aIaKtJ`, where `I` is the lowest anchor id in the layout (the reference).
+- The bridge carries both the TWR and TDOA topics whichever preset is used. Only the active mode's topics receive data.
 
 ### Layout parameters description
 
@@ -250,16 +263,17 @@ Rules:
 | --- | --- |
 | `uavs` | List of UAV definitions. Each entry generates one `<type>_<id>` model (`x500_<id>` by default) and one `uav_offboard_control_<id>` node. |
 | `ugvs` | List of UGV definitions. Each entry generates one `<type>_<id>` model (`r1_rover_<id>` by default) and one `agv_offboard_control_<id>` node. |
+| `static_anchors` | Optional list of anchors fixed in the world, with `id` and `position` in world coordinates. |
 | `id` | Integer robot id. It becomes part of the model name, frame prefix, and node name. Example: `id: 0` produces `x500_0` or `r1_rover_0`. |
 | `model` | Optional. Vehicle type from [`models/vehicles.yaml`](../models/vehicles.yaml) with the matching role. Defaults to the first type listed for that role (`x500` for UAVs, `r1_rover` for UGVs). |
 | `spawn_pose` | World-frame robot spawn pose as `[x, y, z, roll, pitch, yaw]`. The launcher uses this to spawn the robot in Gazebo. The offboard nodes also use it as the origin that maps local trajectory coordinates into world coordinates. |
-| `tags` | For UAVs only. List of mounted UWB tags. |
-| `anchors` | For UGVs only. List of mounted UWB anchors. |
+| `tags` | List of UWB tags mounted on the robot. |
+| `anchors` | List of UWB anchors mounted on the robot. |
 | `offboard` | Per-robot ROS 2 / PX4 offboard control parameters. See below for a full description.|
 
 Each entry under `tags:` or `anchors:` has the same structure:
 
-- `id` : Global integer sensor id. Tag ids must be unique across all UAVs, and anchor ids must be unique across all UGVs.
+- `id` : Global integer sensor id. Tag ids must be unique across all robots, and anchor ids must be unique across all robots and static anchors.
 - `position` : Sensor position relative to the robot `base_link`, as `[x, y, z]` in the robot model frame.
 
 ### Offboard parameters
@@ -279,8 +293,6 @@ These keys are accepted for both UAVs and UGVs.
 | `frame_prefix` | Prefix used for ROS TF frames and default ROS topic naming. | `uav_<id>` or `ugv_<id>` |
 | `marker_array_topic` | ROS topic for the ground-truth marker trail. | `/<frame_prefix>/gt_marker_array` |
 | `world_frame_id` | Name of the world/map frame used for GT pose and TF publishing. | `map` |
-
-*Placeholder until anchors can be placed directly in the world (today they can only be mounted on robots):* a vehicle entry may set `static: true` (next to `id`, not under `offboard`). Its generated model gets `<static>true</static>`, so it stays exactly at its spawn pose with no physics, and no offboard node is launched for it. An unarmed rover can still rock under physics, especially with a tall anchor offset.
 
 ### Eliko aggregated measurements
 
@@ -476,7 +488,7 @@ Publishers:
   - visualization trail of the UAV ground-truth pose
 - TF:
   - dynamic transform `map -> uav_<id>/base_link`
-  - static transforms `uav_<id>/base_link -> uav_<id>/t<tag_id>` for every tag mounted on that UAV
+  - static transforms `uav_<id>/base_link -> uav_<id>/t<tag_id>` and `uav_<id>/a<anchor_id>` for every tag and anchor mounted on that UAV
 
 Subscribers:
 
@@ -517,7 +529,7 @@ Publishers:
   - aggregated UWB range list built from the bridged pair topics
 - TF:
   - dynamic transform `map -> ugv_<id>/base_link`
-  - static transforms `ugv_<id>/base_link -> ugv_<id>/a<anchor_id>` for every anchor mounted on that UGV
+  - static transforms `ugv_<id>/base_link -> ugv_<id>/a<anchor_id>` and `ugv_<id>/t<tag_id>` for every anchor and tag mounted on that UGV
 
 Subscribers:
 
