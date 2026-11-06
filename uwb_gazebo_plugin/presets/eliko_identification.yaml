@@ -38,7 +38,8 @@ noise_start_loss_db: 23.5
 noise_end_loss_db: 37.5
 
 # Dropout: 2% floor; logistic link failure least-squares fitted to the
-# paper's LOS dropout curve over 10-70 m (rms error 0.04).
+# paper's LOS dropout curve over 10-70 m (rms error 0.04), then scaled by the
+# plugin to reach 100% at 75 m, so there is no jump into blackout.
 min_dropout_probability: 0.02
 dropout_mid_loss_db: 35.5
 dropout_width_db: 1.4

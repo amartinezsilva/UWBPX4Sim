@@ -48,13 +48,19 @@ At the 3.7 m separation of the paper's NLOS experiment, generic walls of 0.25 m,
 p =
 \begin{cases}
 1 & L \ge L_{\max} \\
-1 - (1 - p_{\min}) \left(1 - \dfrac{1}{1 + e^{-(L - L_{50})/w}}\right) & \text{otherwise}
+1 - (1 - p_{\min}) \left(1 - \dfrac{s(L)}{s(L_{\max})}\right) & \text{otherwise}
 \end{cases}
+\qquad
+s(L) = \frac{1}{1 + e^{-(L - L_{50})/w}}
 ```
 
 - $`\sigma`$ stays at $`\sigma_{\min}`$ = `min_noise_stddev_cm` up to $`L_{\sigma 0}`$ = `noise_start_loss_db`, then grows exponentially in dB (a power law in distance) to $`\sigma_{\max}`$ = `max_noise_stddev_cm` at $`L_{\sigma 1}`$ = `noise_end_loss_db`.
-- $`p`$ combines an independent floor $`p_{\min}`$ = `min_dropout_probability` (random packet loss) with a logistic link failure as the budget runs out, centred on $`L_{50}`$ = `dropout_mid_loss_db` with width $`w`$ = `dropout_width_db`. Beyond $`L_{\max}`$ = `max_link_loss_db` the link is closed.
+- $`p`$ combines an independent floor $`p_{\min}`$ = `min_dropout_probability` (random packet loss) with a logistic link failure as the budget runs out, centred on $`L_{50}`$ = `dropout_mid_loss_db` with width $`w`$ = `dropout_width_db`. Beyond $`L_{\max}`$ = `max_link_loss_db` the link is closed. The logistic is scaled by $`s(L_{\max})`$ so that $`p`$ reaches 1 exactly there and rises continuously into blackout. As a result $`L_{50}`$ is the logistic's midpoint rather than the exact 50 % point: with the shipped values $`p`$ = 0.63 at $`L_{50}`$, and 0.5 at about 34.9 dB.
 - With `enable_nlos_dropout: false`, dropout uses $`L_d`$ only (obstacles don't drop measurements); noise still uses the full $`L`$.
+
+![Noise standard deviation and dropout probability against the link budget](images/link_budget_curves.png)
+
+The curves use the `eliko_identification` values. In both presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.
 
 ## Moving outliers
 
@@ -130,19 +136,19 @@ The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss ar
 
 | Link | $`L_{\text{obs}}`$ (dB) | $`L`$ (dB) | Regime | $`\sigma`$ (cm) | $`p`$ |
 | --- | ---: | ---: | --- | ---: | ---: |
-| LOS, 5 m / 40 m / 70 m | 0 | 14.0 / 32.0 / 36.9 | LOS | 12.0 / 28.7 / 47.0 | 0.020 / 0.096 / 0.737 |
+| LOS, 5 m / 40 m / 70 m | 0 | 14.0 / 32.0 / 36.9 | LOS | 12.0 / 28.7 / 47.0 | 0.020 / 0.112 / 0.908 |
 | generic 0.25 m, 3.7 m | 7.7 | 19.1 | Soft NLOS | 12.0 | 0.020 |
-| generic 0.25 m, 20 m | 7.7 | 33.8 | Hard NLOS | 34.1 | 0.239 |
+| generic 0.25 m, 20 m | 7.7 | 33.8 | Hard NLOS | 34.1 | 0.298 |
 | generic 0.5 m, 3.7 m | 15.5 | 26.8 | Hard NLOS | 16.9 | 0.022 |
-| generic 0.75 m, 3.7 m | 23.2 | 34.6 | Hard NLOS | 37.1 | 0.355 |
+| generic 0.75 m, 3.7 m | 23.2 | 34.6 | Hard NLOS | 37.1 | 0.439 |
 | generic 1.0 m, 3.7 m | 31.0 | 42.4 | Blackout | -- | 1 |
 | foam / cardboard 0.3 m, glass 6 mm, 5 m | < 1 | 14.0-14.3 | LOS | 12.0 | 0.020 |
 | plastic 0.3 m, 5 m | 1.7 | 15.7 | LOS | 12.0 | 0.020 |
 | wood 0.3 m, 5 m | 7.2 | 21.2 | Soft NLOS | 12.0 | 0.020 |
-| concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.211 |
-| metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.267 |
+| concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.255 |
+| metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.330 |
 
-The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). Both shipped presets set `enable_nlos_dropout: false`: $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
+The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `util_identification`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
 
 ## Limitations
 
@@ -162,13 +168,13 @@ The same wall matters more the farther apart the robots are, since it eats into 
 | `tdoa_topic`, `tdoa_ground_truth_topic` | TDOA measurements, ground truth | `/uwb_gz_simulator/tdoa`, `/uwb_gz_simulator/tdoa_ground_truth` |
 | **Link budget** | | |
 | `path_loss_exponent` | $`n`$ | `2.0` |
-| `max_link_loss_db` | $`L_{\max}`$ | `37.5` |
 | **Noise** | | |
 | `min_noise_stddev_cm`, `max_noise_stddev_cm` | $`\sigma_{\min}`$, $`\sigma_{\max}`$ | `12.0`, `50.0` |
 | `noise_start_loss_db`, `noise_end_loss_db` | $`L_{\sigma 0}`$, $`L_{\sigma 1}`$ | `23.5`, `37.5` |
 | `gaussian_noise_mean_cm` | $`\mu`$ | `0.0` |
 | `moving_outlier_probability`, `moving_outlier_mean_cm` | $`p_o`$, $`m_o`$ | `0.0`, `30.0` |
 | **Dropout** | | |
+| `max_link_loss_db` | $`L_{\max}`$ | `37.5` |
 | `min_dropout_probability` | $`p_{\min}`$ | `0.02` |
 | `dropout_mid_loss_db`, `dropout_width_db` | $`L_{50}`$, $`w`$ | `35.5`, `1.4` |
 | `enable_nlos_dropout` | obstacles affect dropout | `true` |
@@ -200,9 +206,9 @@ The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bia
 | $`d`$ (m) | 5 | 10 | 15 | 30 | 45 | 60 | 70 | > 75 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | $`\sigma`$ (cm) | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
-| $`p`$ | 0.020 | 0.020 | 0.020 | 0.032 | 0.161 | 0.523 | 0.737 | 1 |
+| $`p`$ | 0.020 | 0.020 | 0.020 | 0.037 | 0.201 | 0.641 | 0.908 | 1 |
 
-$`L_{50}`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `util_identification`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
+$`L_{50}`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04, before the scaling by $`s(L_{\max})`$). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `util_identification`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
 
 ### UTIL preset (`util_identification`)
 

@@ -73,7 +73,8 @@ private:
 
   /// \brief Dropout probability for a total excess loss: a floor of
   /// min_dropout_probability combined with a logistic link-failure curve
-  /// centred on dropout_mid_loss_db, and 1 at max_link_loss_db or beyond.
+  /// centred on dropout_mid_loss_db and scaled to reach 1 at max_link_loss_db,
+  /// and 1 beyond it.
   /// \return Dropout probability in the range [0, 1].
   double ComputeDropoutProbability(double lossDb) const;
 

@@ -267,9 +267,15 @@ double UWBGazeboSystem::ComputeDropoutProbability(const double _lossDb) const
     return 1.0;
 
   // Independent floor (random packet loss) and link failure as the budget
-  // runs out: p = 1 - (1 - p_min)(1 - logistic((L - L50) / w)).
-  const double linkFailure =
-      1.0 / (1.0 + std::exp(-(_lossDb - this->dropoutMidLossDb_) / this->dropoutWidthDb_));
+  // runs out: p = 1 - (1 - p_min)(1 - s(L) / s(L_max)), with s the logistic
+  // of (L - L50) / w. Scaling by s(L_max) makes p reach 1 exactly at L_max,
+  // so it rises continuously into blackout.
+  const auto logistic = [this](const double _loss)
+  {
+    return 1.0 / (1.0 + std::exp(-(_loss - this->dropoutMidLossDb_) / this->dropoutWidthDb_));
+  };
+  const double scale = logistic(this->maxLinkLossDb_);  // underflows if L_max << L50
+  const double linkFailure = scale > 0.0 ? logistic(_lossDb) / scale : 0.0;
   return 1.0 - ((1.0 - this->minDropoutProbability_) * (1.0 - linkFailure));
 }
 
