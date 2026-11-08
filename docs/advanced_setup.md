@@ -287,7 +287,7 @@ These keys are accepted for both UAVs and UGVs.
 | `cruise_speed` | Nominal tracking speed in m/s used by the offboard controller. | `0.5` for UAVs, `0.52` for UGVs |
 | `odom_error_position` | Synthetic odometry drift percentage applied to translational motion. `1.0` means about 1 m drift per 100 m traveled. | `0.0` |
 | `odom_error_angle` | Synthetic odometry drift percentage applied to heading increments. | `0.0` |
-| `enabled` | `false` spawns the vehicle without an offboard node: PX4 is never armed. An armed vehicle with `cruise_speed: 0` still turns and creeps. | `true` |
+| `enabled` | `false` spawns the vehicle without an offboard node: PX4 is never armed. A UGV whose trajectory doesn't move (e.g. `trajectory_los_agv.csv`) is also never armed, but keeps its node, so it still publishes its pose and UWB topics. A UGV stops and disarms at the end of its path. | `true` |
 | `ros_odometry_topic` | ROS topic where the node publishes noisy odometry. | `/<frame_prefix>/odom` |
 | `ros_gt_topic` | ROS topic where the node publishes ground-truth pose. | `/<frame_prefix>/gt` |
 | `frame_prefix` | Prefix used for ROS TF frames and default ROS topic naming. | `uav_<id>` or `ugv_<id>` |
