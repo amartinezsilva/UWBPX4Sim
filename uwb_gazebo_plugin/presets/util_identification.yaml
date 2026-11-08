@@ -23,6 +23,8 @@ topic: /uwb_gz_simulator/distances
 ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measurement rate, 1-75 Hz. The calibration used 10 Hz.
+update_rate_hz: 10.0
 
 # Link budget and its long-range shape: UTIL's identification dataset only
 # covers 0.5-6.5 m (L < 17 dB), well short of where noise growth or dropout
@@ -79,7 +81,8 @@ body_shadow_max_loss_db: 10.0
 #     otherwise-fine signal. Not modelled.
 #   - wooden-shelf (anchor-to-tag link) shows a *consistent bias shift*
 #     with tight scatter (-15.8cm bias, only 4.9cm std).
-# Tag obstacles with a "__material_<name>" suffix (e.g. "shelf__material_wood").
+# Tag obstacles with <uwb:material>wood</uwb:material> in the model or a
+# collision, or a "__material_<name>" name suffix (e.g. "shelf__material_wood").
 # Reproducing these 36 anTag setups showed the obstacle shifts are explained to 7.4 cm RMS per placement by
 # the power bias and NLOS folding alone (metal: -34.2 cm predicted vs -35.2
 # cm real), while the dielectric delay of objects treated as solid and a

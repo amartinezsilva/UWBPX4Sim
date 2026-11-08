@@ -88,6 +88,9 @@ private:
   std::string groundTruthTopic_ = "/uwb_gz_simulator/distances_ground_truth";
   std::unordered_map<std::string, gz::transport::Node::Publisher> publishers_;
   std::unordered_map<std::string, gz::transport::Node::Publisher> groundTruthPublishers_;
+  // Measurement rate (update_rate_hz), clamped to [1, 75] Hz.
+  double updateRateHz_{10.0};
+  std::chrono::steady_clock::duration updatePeriod_{std::chrono::milliseconds(100)};
   std::chrono::steady_clock::duration lastUpdateTime_{0};
 
   std::string tagPrefix_ = "uwb_tag";

@@ -153,12 +153,28 @@ select_world() {
   done
 }
 
+GUI_PID=""
+GUI_PROGRESS_LOG=""
+GUI_STATUS_FILE=""
+
+finish_gui() {
+  # Tells the GUI how setup ended (its exit code), gives the page a moment
+  # to show it, then stops the GUI.
+  local code="$1"
+  printf '%s\n' "$code" > "$GUI_STATUS_FILE"
+  sleep 4
+  kill "$GUI_PID" 2>/dev/null || true
+  rm -f "$GUI_PROGRESS_LOG" "$GUI_STATUS_FILE"
+}
+
 run_gui() {
-  # Populates LAYOUT_FILE and PARAMS_PRESET (and, if chosen there,
-  # WORLD_ARG) via the browser GUI instead of the terminal pickers below. Returns 1 on anything short
-  # of a clean finish (missing deps, port taken, GUI closed without
-  # clicking "Continue Setup") so the caller can fall back to select_layout.
-  local gui_dir="$SCRIPT_DIR/gui" selection_file gui_pid
+  # Populates LAYOUT_FILE, PARAMS_PRESET and BUILD_PX4 via the browser GUI
+  # instead of the terminal pickers below. The GUI then stays up and shows
+  # the rest of setup's progress, so the user never has to come back to the
+  # terminal. Returns 1 on anything short of a clean "Continue Setup"
+  # (missing deps, port taken, GUI closed) so the caller can fall back to
+  # select_layout.
+  local gui_dir="$SCRIPT_DIR/gui" selection_file
 
   if [[ ! -f "$gui_dir/app.py" ]]; then
     log_warn "Configuration GUI not found under $gui_dir; using the terminal picker instead."
@@ -171,28 +187,48 @@ run_gui() {
   fi
 
   selection_file="$(mktemp)"
+  GUI_PROGRESS_LOG="$(mktemp)"
+  GUI_STATUS_FILE="$(mktemp)"
 
   echo
   log_info "Configuration GUI: http://localhost:$GUI_PORT"
   log_info "Open that in your browser to build a layout and tune plugin parameters,"
-  log_info "then click 'Continue Setup' there. Ctrl-C here cancels the whole setup."
+  log_info "then click 'Continue Setup' there and follow the rest of setup in the browser."
+  log_info "Ctrl-C here cancels the whole setup."
 
-  python3 "$gui_dir/app.py" --uwb-root "$SCRIPT_DIR" --port "$GUI_PORT" --selection-file "$selection_file" &
-  gui_pid=$!
-  trap 'kill "$gui_pid" 2>/dev/null || true' EXIT INT TERM
-  wait "$gui_pid" || true
-  trap - EXIT INT TERM
+  python3 "$gui_dir/app.py" --uwb-root "$SCRIPT_DIR" --port "$GUI_PORT" --selection-file "$selection_file" \
+    --progress-log "$GUI_PROGRESS_LOG" --status-file "$GUI_STATUS_FILE" --px4-dir "$PX4_DIR" &
+  GUI_PID=$!
+  trap 'kill "$GUI_PID" 2>/dev/null || true' EXIT INT TERM
+  # Wait for "Continue Setup" (the selection file gets written) or the GUI exiting.
+  while kill -0 "$GUI_PID" 2>/dev/null && [[ ! -s "$selection_file" ]]; do
+    sleep 0.5
+  done
 
   if [[ ! -s "$selection_file" ]]; then
+    trap - EXIT INT TERM
     log_warn "GUI exited without finishing; using the terminal picker instead."
-    rm -f "$selection_file"
+    rm -f "$selection_file" "$GUI_PROGRESS_LOG" "$GUI_STATUS_FILE"
+    GUI_PID=""
     return 1
   fi
 
   # shellcheck disable=SC1090
   source "$selection_file"
   rm -f "$selection_file"
-  log_ok "Got layout and settings from the GUI."
+
+  # The GUI stays up to show progress: mirror everything from here on into
+  # its log, and report the exit code when setup ends, however it ends.
+  trap 'finish_gui $?' EXIT
+  trap 'exit 130' INT TERM
+  exec > >(tee -a "$GUI_PROGRESS_LOG") 2>&1
+  # No more terminal questions: the rest follows the GUI's choices and the
+  # prompts' defaults (the world comes from the layout, or PX4's default).
+  ASSUME_YES=1
+  if [[ -z "$DO_BUILD" && -n "${BUILD_PX4:-}" ]]; then
+    DO_BUILD="$BUILD_PX4"
+  fi
+  log_ok "Got layout and settings from the GUI (re-compile PX4: ${DO_BUILD:-no})."
   return 0
 }
 
@@ -795,7 +831,26 @@ else
     fi
 
     if [[ -d "$ROS_WS/install/px4_sim_offboard" ]]; then
-      log_ok "px4_sim_offboard already built in $ROS_WS/install"
+      # Always recompile from the current source: a rebuilt Docker image
+      # compiles its own checkout, and the mounted source can be older by
+      # file date, so an incremental build would keep stale binaries.
+      # Where install/ links into build/ (--symlink-install, as in the
+      # image), rebuilding build/ is enough and leaves install/ untouched.
+      node_bin="$ROS_WS/install/px4_sim_offboard/lib/px4_sim_offboard/uav_offboard_control"
+      if (( DRY_RUN )); then
+        log_info "[DRY-RUN] would recompile px4_sim_offboard from the current source"
+      elif [[ -L "$node_bin" && -d "$ROS_WS/build/px4_sim_offboard" ]]; then
+        log_info "Recompiling px4_sim_offboard from the current source..."
+        cmake --build "$ROS_WS/build/px4_sim_offboard" --clean-first -j >/dev/null \
+          && log_ok "px4_sim_offboard recompiled" \
+          || log_warn "Recompiling px4_sim_offboard failed; run: cmake --build $ROS_WS/build/px4_sim_offboard --clean-first"
+      else
+        require_command colcon
+        log_info "Rebuilding px4_sim_offboard from the current source..."
+        ( cd "$ROS_WS" && colcon build --packages-select px4_sim_offboard --cmake-clean-first ) \
+          && log_ok "px4_sim_offboard rebuilt" \
+          || log_warn "Rebuilding px4_sim_offboard failed; run: cd $ROS_WS && colcon build --packages-select px4_sim_offboard"
+      fi
     else
       if confirm "Build px4_sim_offboard now with colcon?" y; then
         if (( DRY_RUN )); then

@@ -1074,9 +1074,8 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
 
 def offboard_enabled(offboard: Mapping[str, Any]) -> bool:
     """`offboard: {enabled: false}` spawns the vehicle without an offboard node:
-    PX4 is never armed, so the vehicle stays exactly where it spawned. An armed
-    rover fed zero-velocity setpoints still turns and creeps under its own
-    controllers."""
+    PX4 is never armed, so the vehicle stays exactly where it spawned. (The UGV
+    node also leaves a rover disarmed when its trajectory doesn't move.)"""
     return bool(offboard.get("enabled", True))
 
 

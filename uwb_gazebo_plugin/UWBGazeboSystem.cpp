@@ -26,6 +26,8 @@
 #include <gz/sim/EntityComponentManager.hh>
 #include <gz/math/Pose3.hh>
 #include <sdf/Box.hh>
+#include <sdf/Collision.hh>
+#include <sdf/Model.hh>
 #include <sdf/Element.hh>
 #include <sdf/Geometry.hh>
 
@@ -85,25 +87,40 @@ constexpr double kPositiveEpsilon = 1e-6;
         [](const unsigned char c) { return std::isdigit(c) != 0; });
   }
 
-  // Obstacle material tagging follows the same naming-convention style as
-  // extractSensorId above (e.g. "uwb_tag_1") rather than a custom SDF
-  // element: an obstacle's link OR model name carries a "__material_<name>"
-  // suffix, e.g. "wall_1__material_metal". Checked against both names so
-  // either the model or an individual link/collision within it can carry
-  // the tag, whichever is more convenient for a given world's authoring.
-  // Returns empty (no match), so the caller can treat "no tag at all" and
-  // "tag not in the material table" uniformly as the generic material.
+  std::string toLower(std::string _s)
+  {
+    std::transform(_s.begin(), _s.end(), _s.begin(),
+                   [](const unsigned char c) { return std::tolower(c); });
+    return _s;
+  }
+
+  // Fallback material tag: a "__material_<name>" suffix on a link or model
+  // name, e.g. "wall_1__material_metal". Empty if there's none.
   std::string extractMaterialName(const std::string &_name)
   {
     static const std::string kMarker = "__material_";
     const auto pos = _name.rfind(kMarker);
     if (pos == std::string::npos)
       return "";
+    return toLower(_name.substr(pos + kMarker.size()));
+  }
 
-    std::string material = _name.substr(pos + kMarker.size());
-    std::transform(material.begin(), material.end(), material.begin(),
-                   [](const unsigned char c) { return std::tolower(c); });
-    return material;
+  // Preferred material tag: a custom SDF element directly inside a
+  // <collision> or <model>, e.g. <uwb:material>metal</uwb:material>. Custom
+  // elements need a namespace prefix, declared on the <sdf> root as
+  // xmlns:uwb="...". (SDF's own <material> is visual appearance only.)
+  // Empty if there's none.
+  const std::string kMaterialElement = "uwb:material";
+  std::string customMaterialName(const sdf::ElementPtr &_element)
+  {
+    if (!_element || !_element->HasElement(kMaterialElement))
+      return "";
+    std::string material = _element->FindElement(kMaterialElement)->Get<std::string>();
+    const auto first = material.find_first_not_of(" \t\n\r");
+    const auto last = material.find_last_not_of(" \t\n\r");
+    if (first == std::string::npos)
+      return "";
+    return toLower(material.substr(first, last - first + 1));
   }
 
   // Material of untagged obstacles (and of every obstacle with the material
@@ -207,8 +224,13 @@ constexpr double kPositiveEpsilon = 1e-6;
     double noiseStddevCm{0.0};
   };
 
-  // Smallest step between updates that counts as moving.
-  constexpr double kMovingMinStepM = 0.01;
+  // Slowest speed that counts as moving (1 cm per update at 10 Hz).
+  constexpr double kMovingMinSpeedMps = 0.1;
+
+  // Allowed measurement rates. 75 Hz is the highest tag rate Eliko offers;
+  // Bitcraze's LPS is slower. See docs/measurement_model.md.
+  constexpr double kMinUpdateRateHz = 1.0;
+  constexpr double kMaxUpdateRateHz = 75.0;
 }  // namespace
 
 double UWBGazeboSystem::PathLossDb(const double _distanceM) const
@@ -281,6 +303,17 @@ double UWBGazeboSystem::ComputeDropoutProbability(const double _lossDb) const
 
 void UWBGazeboSystem::ValidateAndNormalizeParameters()
 {
+  if (!(this->updateRateHz_ >= kMinUpdateRateHz && this->updateRateHz_ <= kMaxUpdateRateHz))
+  {
+    const double clamped = std::isfinite(this->updateRateHz_)
+        ? std::clamp(this->updateRateHz_, kMinUpdateRateHz, kMaxUpdateRateHz) : 10.0;
+    gzwarn << "[UWBGazeboSystem] update_rate_hz=" << this->updateRateHz_ << " is outside ["
+           << kMinUpdateRateHz << ", " << kMaxUpdateRateHz << "] Hz. Using " << clamped << ".\n";
+    this->updateRateHz_ = clamped;
+  }
+  this->updatePeriod_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(1.0 / this->updateRateHz_));
+
   if (this->biasMinCm_ > this->biasMaxCm_)
   {
     gzwarn << "[UWBGazeboSystem] bias_min_cm > bias_max_cm. Swapping values.\n";
@@ -411,6 +444,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   if (this->randomSeed_ != 0)
     this->rng_.seed(this->randomSeed_);
 
+  readDouble("update_rate_hz", this->updateRateHz_);
   readDouble("path_loss_exponent", this->pathLossExponent_);
   readDouble("max_link_loss_db", this->maxLinkLossDb_);
   readDouble("noise_start_loss_db", this->noiseStartLossDb_);
@@ -514,6 +548,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
     }
   }
 
+  gzmsg << "[UWBGazeboSystem] update_rate_hz=" << this->updateRateHz_ << "\n";
   gzmsg << "[UWBGazeboSystem] Link-budget model: path_loss_exponent=" << this->pathLossExponent_
         << ", max_link_loss_db=" << this->maxLinkLossDb_
         << ", noise_loss_range_db=[" << this->noiseStartLossDb_ << ", " << this->noiseEndLossDb_ << "]"
@@ -776,12 +811,14 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
                                 gz::sim::EntityComponentManager &ecm)
 {
 
+	// Updates are scheduled on a fixed grid of updatePeriod_, so the rate
+	// stays exact when the period isn't a multiple of the physics step. If
+	// the simulation falls behind by a whole period, it restarts from now.
 	const auto now = info.simTime;
-	const auto dt = now - this->lastUpdateTime_;
-
-	if (dt < std::chrono::milliseconds(100)) return;
-
-	this->lastUpdateTime_ = now;
+	if (now - this->lastUpdateTime_ < this->updatePeriod_) return;
+	this->lastUpdateTime_ += this->updatePeriod_;
+	if (now - this->lastUpdateTime_ >= this->updatePeriod_)
+		this->lastUpdateTime_ = now;
 
 	std::vector<std::pair<std::string, gz::sim::Entity>> tags;
 	std::vector<std::pair<std::string, gz::sim::Entity>> anchors;
@@ -914,14 +951,37 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	{
 		for (const auto &linkEntity : obstacleLinks)
 		{
+			// Most specific first: <uwb:material> on one of the link's
+			// collisions, the link name's suffix, <uwb:material> on the model,
+			// then the model name's suffix.
 			std::string materialName;
-			const auto linkNameComp = ecm.Component<gz::sim::components::Name>(linkEntity);
-			if (linkNameComp)
-				materialName = extractMaterialName(linkNameComp->Data());
+			for (const auto &collision :
+			     ecm.ChildrenByComponents(linkEntity, gz::sim::components::Collision()))
+			{
+				const auto element = ecm.Component<gz::sim::components::CollisionElement>(collision);
+				if (element)
+					materialName = customMaterialName(element->Data().Element());
+				if (!materialName.empty())
+					break;
+			}
 
 			if (materialName.empty())
 			{
-				const auto parentEntity = ecm.ParentEntity(linkEntity);
+				const auto linkNameComp = ecm.Component<gz::sim::components::Name>(linkEntity);
+				if (linkNameComp)
+					materialName = extractMaterialName(linkNameComp->Data());
+			}
+
+			const auto parentEntity = ecm.ParentEntity(linkEntity);
+			if (materialName.empty())
+			{
+				const auto modelSdf = ecm.Component<gz::sim::components::ModelSdf>(parentEntity);
+				if (modelSdf)
+					materialName = customMaterialName(modelSdf->Data().Element());
+			}
+
+			if (materialName.empty())
+			{
 				const auto modelNameComp = ecm.Component<gz::sim::components::Name>(parentEntity);
 				if (modelNameComp)
 					materialName = extractMaterialName(modelNameComp->Data());
@@ -958,7 +1018,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			const gz::math::Vector3d sensorPos = computeWorldPose(sensorEntity, ecm).Pos();
 			const auto last = this->lastSensorPosition_.find(sensorEntity);
 			sensorMoving[sensorEntity] = last != this->lastSensorPosition_.end() &&
-			                             sensorPos.Distance(last->second) > kMovingMinStepM;
+			                             sensorPos.Distance(last->second) > kMovingMinSpeedMps / this->updateRateHz_;
 			this->lastSensorPosition_[sensorEntity] = sensorPos;
 		}
 	}

@@ -8,7 +8,7 @@ How to run without Docker, and reference for the layout file, the manual install
 - `models/uwb_meshes/`: UWB tag/anchor meshes added to the generated models
 - `models/custom_models/`: auto-generated per-robot UAV and UGV models with the desired UWB transceiver layouts
 - `ROS2/px4_sim_offboard/`: ROS 2 package for the PX4/Gazebo bridge and offboard-side nodes
-- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs, in both TWR and TDOA (the file in the repository is just a sample)
+- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs, in both TWR and TDOA. Setup writes it from the chosen layout, so it isn't tracked in git.
 - `config/`: layout YAML files used for model generation and simulator spawning
 - `setup_simulator.sh`: guided setup script (models, plugin, plugin parameters, optional world, optional PX4 rebuild, ROS 2 workspace checks)
 - `simulator_launcher.sh`: tmux-based PX4 SITL launcher
@@ -28,7 +28,6 @@ Before using `UWBPX4Sim`, make sure the following are installed:
 - [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/index.html)
 - [Gazebo Harmonic](https://gazebosim.org/docs/harmonic/ros_installation/)
 - [PX4 toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html)
-- [QGroundControl](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html)
 - [Micro XRCE-DDS Agent and Client](https://docs.px4.io/main/en/ros2/user_guide.html#setup-micro-xrce-dds-agent-client)
 - [tmux](https://github.com/tmux/tmux/wiki/Installing)
 - The `eliko_messages` ROS 2 package from [`eliko_ros`](https://github.com/robotics-upo/eliko_ros), required by the UGV offboard node to publish aggregated UWB range messages.
@@ -90,14 +89,12 @@ export GZ_WORLD=<your-world-name>
 
 - the ROS 2 workspace directory is either at `<path_to_UWBPX4Sim>/../..` (when using UWBPX4Sim as standalone) or `<path_to_UWBPX4Sim>/../../..` (when using UWBPX4Sim as a submodule of `mr-radio-localization`)
 - PX4 lives at `~/PX4-Autopilot`
-- the QGroundControl AppImage is located in `~/Desktop` or `~/Downloads`
 
 If your setup differs, override the paths before launching:
 
 ```bash
 export ROS_WS=/path/to/your_ws
 export PX4_DIR=/path/to/PX4-Autopilot
-export QGC_PATH=/path/to/QGroundControl.AppImage
 ```
 
 Then launch the simulation:
@@ -106,10 +103,13 @@ Then launch the simulation:
 ./simulator_launcher.sh
 ```
 
+RViz opens in its own tmux window with every robot, its tags (red) and anchors (blue), a line from each tag to each anchor that stays bright while measurements arrive and fades while they drop out, and each robot's path. It's built from the layout, so it works for any experiment: `ROS2/px4_sim_offboard/scripts/uwb_viz.py` publishes everything on `/uwb_viz/markers`, and `ROS2/px4_sim_offboard/rviz/uwbpx4sim.rviz` displays it.
+
+No ground station is needed: the offboard nodes arm and fly the vehicles, and the launcher turns off PX4's ground-station check on every instance for the run. You can still connect QGroundControl yourself to monitor them.
+
 | Option | Effect |
 | --- | --- |
-| `--no-qgc` | Don't require or start QGroundControl; PX4's ground-station check is turned off for that run |
-| `--headless` | Run Gazebo without its GUI |
+| `--headless` | Run Gazebo without its GUI, and don't open RViz |
 | `--detach` | Don't attach to the tmux session; stop it with `tmux kill-session -t <session>` |
 
 ## Layout files
@@ -287,7 +287,7 @@ These keys are accepted for both UAVs and UGVs.
 | `cruise_speed` | Nominal tracking speed in m/s used by the offboard controller. | `0.5` for UAVs, `0.52` for UGVs |
 | `odom_error_position` | Synthetic odometry drift percentage applied to translational motion. `1.0` means about 1 m drift per 100 m traveled. | `0.0` |
 | `odom_error_angle` | Synthetic odometry drift percentage applied to heading increments. | `0.0` |
-| `enabled` | `false` spawns the vehicle without an offboard node: PX4 is never armed. An armed vehicle with `cruise_speed: 0` still turns and creeps. | `true` |
+| `enabled` | `false` spawns the vehicle without an offboard node: PX4 is never armed. A UGV whose trajectory doesn't move (e.g. `trajectory_los_agv.csv`) is also never armed, but keeps its node, so it still publishes its pose and UWB topics. A UGV stops and disarms at the end of its path. | `true` |
 | `ros_odometry_topic` | ROS topic where the node publishes noisy odometry. | `/<frame_prefix>/odom` |
 | `ros_gt_topic` | ROS topic where the node publishes ground-truth pose. | `/<frame_prefix>/gt` |
 | `frame_prefix` | Prefix used for ROS TF frames and default ROS topic naming. | `uav_<id>` or `ugv_<id>` |
@@ -343,6 +343,7 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <ground_truth_topic>/uwb_gz_simulator/distances_ground_truth</ground_truth_topic>
   <tdoa_topic>/uwb_gz_simulator/tdoa</tdoa_topic>
   <tdoa_ground_truth_topic>/uwb_gz_simulator/tdoa_ground_truth</tdoa_ground_truth_topic>
+  <update_rate_hz>10.0</update_rate_hz>
 
   <path_loss_exponent>2.0</path_loss_exponent>
   <max_link_loss_db>37.5</max_link_loss_db>

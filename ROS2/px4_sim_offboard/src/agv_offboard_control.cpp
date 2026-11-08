@@ -224,6 +224,11 @@ private:
 
     rclcpp::Time start_time_;
     bool started_ = false;
+    // A trajectory that doesn't move (e.g. all zeros): the rover is never
+    // armed, so it stays where it spawned instead of spinning in place.
+    bool stationary_ = false;
+    // Set once the rover reaches the end of its path and is disarmed.
+    bool finished_ = false;
 
     // In class AGVOffboardControl private:
     int    last_heading_reset_counter_{-1};
@@ -732,6 +737,8 @@ bool AGVOffboardControl::parseAnchorTagKey(
 void AGVOffboardControl::timer_callback()
 {
 
+    if (stationary_) return;
+
     if (++offboard_counter_ == 10) {
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1);
@@ -804,6 +811,15 @@ void AGVOffboardControl::load_trajectory(const std::string &filename)
 	}
 	file.close();
 	RCLCPP_INFO(this->get_logger(), "Loaded %zu trajectory points.", trajectory_.size());
+
+	double path_length = 0.0;
+	for (size_t i = 1; i < trajectory_.size(); ++i) {
+		path_length += std::hypot(trajectory_[i][0] - trajectory_[i-1][0], trajectory_[i][1] - trajectory_[i-1][1]);
+	}
+	stationary_ = path_length < 0.05;
+	if (stationary_) {
+		RCLCPP_INFO(this->get_logger(), "Trajectory doesn't move: the rover stays disarmed at its spawn pose.");
+	}
 }
 
 void AGVOffboardControl::publish_offboard_control_mode()
@@ -828,7 +844,7 @@ void AGVOffboardControl::publish_trajectory_setpoint()
 
     if (trajectory_.empty()) return;
 
-    if(!started_) return;
+    if(!started_ || finished_) return;
 
     // ---- Closest-point search in a forward window (like UAV) ----
     const size_t window_size = 50;
@@ -879,7 +895,19 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     // End-of-path stop (optional): if near the last waypoint, stop.
     // If we're very near the end of the path, trigger LAND (once)
 	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
-			return;
+		// Stop for good: PX4 would otherwise keep following the last
+		// setpoint and circle the end point.
+		TrajectorySetpoint stop{};
+		const auto nan = std::numeric_limits<float>::quiet_NaN();
+		stop.position = {nan, nan, nan};
+		stop.velocity = {0.0f, 0.0f, 0.0f};
+		stop.yaw = nan;
+		stop.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+		trajectory_setpoint_publisher_->publish(stop);
+		publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 0);
+		finished_ = true;
+		RCLCPP_INFO(this->get_logger(), "End of trajectory reached: rover stopped and disarmed.");
+		return;
 	}
 
     // ----- SAFE direction: use ex,ey if valid; else use path tangent -----

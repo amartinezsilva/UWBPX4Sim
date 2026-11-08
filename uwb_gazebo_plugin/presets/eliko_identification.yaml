@@ -24,6 +24,8 @@ topic: /uwb_gz_simulator/distances
 ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measurement rate, 1-75 Hz. The calibration used 10 Hz.
+update_rate_hz: 10.0
 
 # Link budget: free-space path loss (n = 2) relative to 1 m. 37.5 dB is
 # 75 m, the datasheet's maximum range.
@@ -53,8 +55,8 @@ nlos_min_loss_db: 3.0
 body_shadow_max_loss_db: 10.0
 
 # Materials: from util_identification (no Eliko NLOS calibration). Tag
-# obstacles with a "__material_<name>" suffix; untagged ones are the generic
-# material. 4 GHz is DW1000 channel 2: Eliko KIO's FCC grant (FCC ID
+# obstacles with <uwb:material> or a "__material_<name>" suffix; untagged ones
+# are the generic material. 4 GHz is DW1000 channel 2: Eliko KIO's FCC grant (FCC ID
 # 2AF2IKIO4) covers 3300-4450 MHz, which only channel 2 fits entirely.
 enable_material_attenuation: true
 carrier_frequency_ghz: 4.0

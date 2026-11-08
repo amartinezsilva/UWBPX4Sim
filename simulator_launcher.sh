@@ -90,10 +90,8 @@ Options:
   (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/demo_nlos.yaml)
   (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: the
                        layout's own 'world:' field if it names one installed there, else "default")
-  --no-qgc             Don't require or start QGroundControl. PX4 then needs NAV_DLL_ACT=0 to
-                       arm without a ground station, which this sets (as a runtime default,
-                       not saved) on every instance once it has booted.
-  --headless           Run Gazebo without its GUI (sets HEADLESS=1 for PX4's gz launcher).
+  --headless           Run Gazebo without its GUI (sets HEADLESS=1 for PX4's gz launcher), and
+                       don't open RViz.
   --detach             Don't attach to the tmux session, and leave the simulation running when
                        this script exits; stop it with 'tmux kill-session -t \$SESSION'. For
                        unattended runs.
@@ -101,14 +99,12 @@ Options:
 EOF2
 }
 
-USE_QGC=1
 HEADLESS_GZ=0
 DETACH=0
 
 parse_args() {
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --no-qgc) USE_QGC=0 ;;
       --headless) HEADLESS_GZ=1 ;;
       --detach) DETACH=1 ;;
       -h|--help)
@@ -123,24 +119,6 @@ parse_args() {
     esac
     shift
   done
-}
-
-find_qgc() {
-  local candidate
-
-  if [[ -n "${QGC_PATH:-}" ]]; then
-    printf '%s\n' "$QGC_PATH"
-    return 0
-  fi
-
-  for candidate in "$HOME/Desktop"/QGroundControl*.AppImage "$HOME/Downloads"/QGroundControl*.AppImage; do
-    if [[ -f "$candidate" ]]; then
-      printf '%s\n' "$candidate"
-      return 0
-    fi
-  done
-
-  return 1
 }
 
 require_command() {
@@ -165,13 +143,7 @@ build_ros_shell_command() {
   printf '%s' "$wrapped"
 }
 
-QGC_PATH="$(find_qgc || true)"
 parse_args "$@"
-
-if (( USE_QGC )) && [[ -z "$QGC_PATH" ]]; then
-  echo "[ERROR] QGroundControl AppImage not found. Set QGC_PATH or place it in ~/Desktop or ~/Downloads (or pass --no-qgc)." >&2
-  exit 1
-fi
 
 require_directory "$ROS_WS"
 require_directory "$PX4_DIR"
@@ -285,9 +257,6 @@ read -r TMUX_COLS TMUX_LINES < <(get_tmux_size)
 tmux new-session -d -x "$TMUX_COLS" -y "$TMUX_LINES" -s "$SESSION" -n tools
 create_window_with_panes "$SESSION:0" 2
 
-if (( USE_QGC )); then
-  tmux send-keys -t "$SESSION:0.0" "chmod +x \"$QGC_PATH\" && \"$QGC_PATH\"" C-m
-fi
 tmux send-keys -t "$SESSION:0.1" "MicroXRCEAgent udp4 -p 8888" C-m
 
 HEADLESS_ENV=""
@@ -295,18 +264,18 @@ if (( HEADLESS_GZ )); then
   HEADLESS_ENV="HEADLESS=1 "
 fi
 
-# Without a ground station, PX4 refuses to arm while NAV_DLL_ACT > 0 ("No
+# No ground station is started, and PX4 refuses to arm while NAV_DLL_ACT > 0 ("No
 # connection to the GCS"; commander's rcAndDataLinkCheck.cpp). A
 # PX4_PARAM_NAV_DLL_ACT=0 env override doesn't work: rcS applies it before the
 # airframe (4001_gz_x500 runs `param set-default NAV_DLL_ACT 2`), and since 0
 # equals the firmware default nothing is stored, so the airframe's 2 wins.
 # Instead, once each instance has finished booting (its uXRCE-DDS client,
 # started at the end of rcS, answers), lower the default at runtime. Defaults
-# aren't saved to parameters.bson, so later runs with QGC are unaffected.
+# aren't saved to parameters.bson, so nothing persists between runs.
 nav_dll_cmd() {
   local px4_bin_dir
   px4_bin_dir="$(dirname "$PX4_BIN")"
-  local cmd="echo '[INFO] QGroundControl disabled (--no-qgc): setting NAV_DLL_ACT=0 on each PX4 instance once booted.'"
+  local cmd="echo '[INFO] No ground station: setting NAV_DLL_ACT=0 on each PX4 instance once booted.'"
   local i
   for i in "$@"; do
     cmd+=" && until \"$px4_bin_dir/px4-uxrce_dds_client\" --instance $i status >/dev/null 2>&1; do sleep 1; done"
@@ -346,15 +315,18 @@ for spec in "${SPAWN_SPECS[@]}"; do
   vehicle_idx=$((vehicle_idx + 1))
 done
 
-if (( ! USE_QGC )); then
-  tmux send-keys -t "$SESSION:0.0" "$(nav_dll_cmd "${PX4_INSTANCES[@]}")" C-m
-fi
+tmux send-keys -t "$SESSION:0.0" "$(nav_dll_cmd "${PX4_INSTANCES[@]}")" C-m
 
 tmux new-window -t "$SESSION:2" -n ros2
 create_window_with_panes "$SESSION:2" 3
 
 tmux send-keys -t "$SESSION:2.0" "$(build_ros_shell_command "sleep 12 && cd \"$ROS_WS\" && PX4_SIM_OFFBOARD_BRIDGE_CONFIG=\"$UWB_BRIDGE_CONFIG\" ros2 launch px4_sim_offboard uwb_bridge_launch.py")" C-m
 tmux send-keys -t "$SESSION:2.1" "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && UWB_LAYOUT_FILE=\"$UWB_LAYOUT_FILE\" ros2 launch px4_sim_offboard offboard_launch.py")" C-m
+if (( ! HEADLESS_GZ )); then
+  tmux new-window -t "$SESSION:3" -n rviz
+  tmux send-keys -t "$SESSION:3" "$(build_ros_shell_command "sleep 25 && rviz2 -d \"$SCRIPT_DIR/ROS2/px4_sim_offboard/rviz/uwbpx4sim.rviz\" --ros-args -p use_sim_time:=true")" C-m
+fi
+
 spawned_models_str="${SPAWNED_MODELS[*]}"
 tmux send-keys -t "$SESSION:2.2" "echo '[INFO] UWB launcher.' && echo '[INFO] Layout file: $UWB_LAYOUT_FILE' && echo '[INFO] Spawned models: $spawned_models_str' && echo '[INFO] Bridge topics should appear under /uwb_gz_simulator/distances/aItJ and /uwb_gz_simulator/distances_ground_truth/aItJ.' && echo '[INFO] Offboard nodes are configured directly from the layout YAML.'" C-m
 if [[ -n "$STATIC_ANCHORS_MODEL" ]]; then

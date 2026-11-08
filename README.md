@@ -15,7 +15,7 @@ A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot
 - **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance and by the obstacles in the way, including their material. See [Measurement model](docs/measurement_model.md).
 - **Calibrated presets**: `eliko_identification` (Eliko, TWR) and `util_identification` (UTIL dataset, TDOA). Tune one and save your own from the setup GUI.
 - **Multi-robot layouts** from one YAML file: UAVs and UGVs carrying any mix of tags and anchors, plus anchors fixed in the world. Vehicle models and the ROS 2 bridge are generated from it.
-- **Guided setup** with a browser GUI, and a one-command **launcher**.
+- **Guided setup** with a browser GUI, a one-command **launcher**, and **RViz** showing the robots, transceivers and live UWB links for any layout.
 - **ROS 2 offboard nodes** that fly the UAVs and drive the UGVs along CSV trajectories.
 
 ## Getting started
@@ -31,10 +31,12 @@ cd UWBPX4Sim/docker
 
 The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it can take a while (15-30 minutes depending on your machine); subsequent runs reuse the cached image and start instantly. `setup.sh` then starts a **persistent** container in the background and drops you into its guided menu:
 
-1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters; falls back to terminal prompts if the GUI isn't available.
+1. **Run UWBPX4Sim setup** (`setup_simulator.sh`): configure the PX4/Gazebo plugin, models, and layout inside the container. Opens a browser-based GUI (prints the URL, default `http://localhost:5050`) to build the robot layout and tune plugin parameters, then shows setup's progress there, including the optional PX4 re-compile; falls back to terminal prompts if the GUI isn't available.
 2. **Launch simulation** (ticks once setup has been run): launches PX4 SITL, Gazebo, and the UWB bridge/offboard nodes via `simulator_launcher.sh`.
 3. **Open a shell**: skip the menu and get a plain shell in the container.
 4. **Exit**: stops the container, and asks whether to remove it completely instead (default just stops it) -- everything else, including closing your terminal, leaves it running with your configuration intact. Run `./setup.sh` again any time to get back to this same menu.
+
+![The setup GUI: a layout with one UAV, one UGV and four static anchors](images/gui_setup.png)
 
 `docker-compose.yml` bind-mounts the whole repository (plus `ROS2/px4_sim_offboard/trajectories/` onto its installed path) from the host into the container, so editing a layout, a plugin-parameter preset, a custom world, a trajectory CSV, or the plugin source on the host takes effect the next time setup (or the simulation) runs -- no image rebuild needed.
 
@@ -71,7 +73,16 @@ static_anchors:                                            # optional, not on a 
 
 Any robot can carry `tags`, `anchors` or both. Tag ids must be unique across the layout, and so must anchor ids. `uavs` and `ugvs` are optional, as long as there is at least one tag and one anchor. See [`config/`](config/) for complete examples. Build layouts from the setup GUI or edit the files directly, then run setup again.
 
-To mark an obstacle's material, add a `__material_<name>` suffix to its model name in the world, e.g. `wall_1__material_concrete`.
+To mark an obstacle's material, add a `<uwb:material>` element to its model (or to one of its collisions), and declare the `uwb` prefix on the world's `<sdf>` root:
+
+```xml
+<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">
+  ...
+  <model name="wall_1">
+    <uwb:material>concrete</uwb:material>
+```
+
+A `__material_<name>` suffix on the model name, e.g. `wall_1__material_concrete`, also still works. See the [measurement model](docs/measurement_model.md#link-geometry) for details.
 
 ## Output topics
 

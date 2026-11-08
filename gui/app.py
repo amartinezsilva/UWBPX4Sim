@@ -118,7 +118,8 @@ def validate_layout(layout: dict[str, Any], vehicle_types: list[dict[str, str]])
     return errors
 
 
-def create_app(uwb_root: Path, selection_file: Path) -> Flask:
+def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None = None,
+               status_file: Path | None = None, px4_dir: Path | None = None) -> Flask:
     app = Flask(__name__, static_folder=str(Path(__file__).parent / "static"), static_url_path="")
 
     config_dir = uwb_root / "config"
@@ -154,6 +155,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("ground_truth_topic", "/uwb_gz_simulator/distances_ground_truth"),
             ("tdoa_topic", "/uwb_gz_simulator/tdoa"),
             ("tdoa_ground_truth_topic", "/uwb_gz_simulator/tdoa_ground_truth"),
+            ("update_rate_hz", 10.0),
         ]),
         ("Link budget (dB; with n = 2, 23.5 dB = 15 m and 37.5 dB = 75 m).", [
             ("path_loss_exponent", 2.0),
@@ -176,7 +178,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("nlos_min_loss_db", 3.0),
             ("body_shadow_max_loss_db", 10.0),
         ]),
-        ("Materials (obstacles named *__material_<name>).", [
+        ("Materials (obstacles tagged <uwb:material> or named *__material_<name>).", [
             ("enable_material_attenuation", False),
             ("carrier_frequency_ghz", 4.0),
             ("material_metal_detour_loss_db", 20.0),
@@ -240,6 +242,11 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
     @app.get("/")
     def index():
         return send_from_directory(app.static_folder, "index.html")
+
+    # The repo's own logo, served from images/ rather than copied here.
+    @app.get("/logo.png")
+    def logo():
+        return send_from_directory(uwb_root / "images", "Logo.png")
 
     # -- layouts ---------------------------------------------------------
 
@@ -393,14 +400,56 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
         with open(selection_file, "w") as f:
             f.write(f"LAYOUT_FILE={_shell_quote(layout_path)}\n")
             f.write(f"PARAMS_PRESET={_shell_quote(preset_path.stem)}\n")
+            f.write(f"BUILD_PX4={'yes' if body.get('build_px4') else 'no'}\n")
 
-        def _shutdown():
-            os._exit(0)
-
-        threading.Timer(0.3, _shutdown).start()
+        # setup_simulator.sh keeps this GUI running to show its progress and
+        # stops it when done. Without a progress log, hand back right away.
+        if progress_log is None:
+            threading.Timer(0.3, lambda: os._exit(0)).start()
         return jsonify({"ok": True})
 
+    # -- setup progress, shown in the GUI after "Continue Setup" -----------
+
+    @app.get("/api/build-info")
+    def build_info():
+        plugin = None
+        if px4_dir is not None:
+            plugin = (px4_dir / "build" / "px4_sitl_default" / "src" / "modules" / "simulation"
+                      / "gz_plugins" / "libUWBGazeboPlugin.so").is_file()
+        return jsonify({"plugin_built": plugin})
+
+    @app.get("/api/progress")
+    def progress():
+        text = ""
+        if progress_log is not None and progress_log.is_file():
+            with open(progress_log, "rb") as f:
+                f.seek(0, os.SEEK_END)
+                f.seek(max(0, f.tell() - 200_000))
+                text = f.read().decode("utf-8", errors="replace")
+        lines = [ANSI_RE.sub("", line).rstrip("\r") for line in text.split("\n")]
+        lines = [line for line in lines if line.strip()]
+        step = next((line[4:] for line in reversed(lines) if line.startswith("==> ")), "Starting...")
+        step_start = max((i for i, line in enumerate(lines) if line.startswith("==> ")), default=0)
+        percent = None
+        for line in reversed(lines[step_start:]):
+            match = BUILD_PROGRESS_RE.search(line)
+            if match and int(match.group(2)) > 0:
+                percent = round(100 * int(match.group(1)) / int(match.group(2)))
+                break
+        exit_code = None
+        if status_file is not None and status_file.is_file():
+            content = status_file.read_text().strip()
+            exit_code = int(content) if content.lstrip("-").isdigit() else None
+        state = "running" if exit_code is None else ("done" if exit_code == 0 else "failed")
+        return jsonify({"state": state, "exit_code": exit_code, "step": step,
+                        "percent": percent, "lines": lines[-300:]})
+
     return app
+
+
+# Colour codes in setup's output, and build progress like "[123/456]".
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+BUILD_PROGRESS_RE = re.compile(r"\[(\d+)/(\d+)\]")
 
 
 def _shell_quote(value: str) -> str:
@@ -414,9 +463,12 @@ def main() -> None:
     parser.add_argument("--uwb-root", type=Path, required=True)
     parser.add_argument("--port", type=int, default=5050)
     parser.add_argument("--selection-file", type=Path, required=True)
+    parser.add_argument("--progress-log", type=Path, help="setup_simulator.sh output to show after Continue")
+    parser.add_argument("--status-file", type=Path, help="Gets setup_simulator.sh's exit code when it ends")
+    parser.add_argument("--px4-dir", type=Path, help="PX4 checkout, to tell whether the plugin is built")
     args = parser.parse_args()
 
-    app = create_app(args.uwb_root.resolve(), args.selection_file)
+    app = create_app(args.uwb_root.resolve(), args.selection_file, args.progress_log, args.status_file, args.px4_dir)
     app.run(host="0.0.0.0", port=args.port, debug=False)
 
 

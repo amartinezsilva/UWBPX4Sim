@@ -73,12 +73,6 @@ services:
       # adds the ability to drop in new ones from the host without rebuilding.
       - ../ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    devices:
-      - /dev/fuse
-    cap_add:
-      - SYS_ADMIN
-    security_opt:
-      - apparmor:unconfined
     # NVIDIA GPU passthrough for Gazebo rendering (needs the host's NVIDIA
     # driver + nvidia-container-toolkit installed). This `deploy.resources`
     # form works with plain `docker compose run`/`up` outside Swarm too --

@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>UWBPX4Sim setup</h1>
+  <h1><img class="logo" src="logo.png" alt="UWBPX4Sim"><span class="page-name">Setup</span></h1>
   <p class="subtitle">Build a layout, tune the plugin, then continue setup_simulator.sh.</p>
 </header>
 
@@ -87,8 +87,29 @@
 <footer>
   <button id="continue-setup" class="primary">Continue Setup &rarr;</button>
   <span id="continue-status" class="status"></span>
-  <p class="hint">Saves the current layout and plugin parameters, then hands control back to setup_simulator.sh in your terminal.</p>
+  <label class="build-option" title="Takes several minutes">
+    <input type="checkbox" id="build-px4"> Re-compile PX4
+    <span id="build-px4-note" class="build-note"></span>
+  </label>
+  <p class="hint">Saves the layout and plugin parameters, then applies them here. Re-compile PX4 the first time in a new
+    container and after changing the plugin's C++ code; layouts, worlds and plugin parameters don't need it.</p>
 </footer>
+
+<div id="progress-overlay" class="overlay" hidden>
+  <div class="progress-card">
+    <div class="progress-head">
+      <div id="progress-spinner" class="spinner" aria-hidden="true"></div>
+      <h2 id="progress-title">Applying setup...</h2>
+    </div>
+    <p id="progress-step" class="progress-step"></p>
+    <div id="progress-bar" class="progress-bar" hidden><div id="progress-fill"></div></div>
+    <details open>
+      <summary>Log</summary>
+      <pre id="progress-log"></pre>
+    </details>
+    <p id="progress-final" class="progress-final"></p>
+  </div>
+</div>
 
 <template id="tpl-sensor-row">
   <div class="sensor-row">

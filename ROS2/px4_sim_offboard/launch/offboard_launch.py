@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 
 
@@ -92,6 +93,20 @@ def generate_launch_description():
                 ],
             )
         )
+
+    # RViz markers for this layout. Run from the source tree, so it needs no
+    # rebuild; see scripts/uwb_viz.py.
+    uwb_root = _uwb_root(layout_file)
+    actions.append(
+        ExecuteProcess(
+            cmd=[sys.executable, str(uwb_root / 'ROS2' / 'px4_sim_offboard' / 'scripts' / 'uwb_viz.py'),
+                 '--ros-args', '-r', '__node:=uwb_viz',
+                 '-p', f'layout_file:={layout_file}', '-p', f'uwb_root:={uwb_root}',
+                 '-p', f"px4_dir:={os.environ.get('PX4_DIR', str(Path.home() / 'PX4-Autopilot'))}",
+                 '-p', 'use_sim_time:=true'],
+            output='screen',
+        )
+    )
 
     actions.append(
         Node(
