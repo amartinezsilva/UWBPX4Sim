@@ -5,8 +5,8 @@
 # on top -- see that Dockerfile's comments for why.
 FROM osrf/ros:jazzy-desktop-full
 
-# fuse3 provides fusermount3 for running QGC; python3-flask backs the setup GUI (gui/app.py)
-RUN apt-get update && sudo apt-get install lsb-release wget gnupg nano inetutils-ping tmux fuse3 python3-flask -y
+# python3-flask backs the setup GUI (gui/app.py)
+RUN apt-get update && sudo apt-get install lsb-release wget gnupg nano inetutils-ping tmux python3-flask -y
 RUN lsb_release -cs
 RUN dpkg --print-architecture
 
@@ -84,12 +84,6 @@ RUN echo "jazzy:jazzy" | chpasswd
 #### Remove #### to change the password
 RUN adduser jazzy sudo & adduser jazzy dialout & adduser jazzy plugdev & echo Hi
 RUN usermod -aG sudo jazzy
-
-# Set up QGroundControl
-RUN mkdir -p /home/jazzy/Desktop && \
-    wget -O /home/jazzy/Desktop/QGroundControl-x86_64.AppImage \
-      https://github.com/mavlink/qgroundcontrol/releases/latest/download/QGroundControl-x86_64.AppImage && \
-    chmod +x /home/jazzy/Desktop/QGroundControl-x86_64.AppImage
 
 # Everything above was cloned while running as root. ros2_ws landed under
 # /root (via `cd` with no argument), while PX4-Autopilot landed at

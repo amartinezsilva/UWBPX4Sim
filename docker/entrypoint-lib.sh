@@ -102,7 +102,7 @@ ${C_DIM}Tip: the whole UWBPX4Sim repo is bind-mounted from the host -- edit a
 layout, a plugin-parameter preset, or drop in a custom .sdf world (or the
 C++ plugin itself) there, then re-run setup (option 1) / rebuild to apply it.
 
-Tip: for QGroundControl/Gazebo windows to appear, run on the HOST
+Tip: for Gazebo windows to appear, run on the HOST
 first: xhost +local:docker (see docker-compose.yml's comments for the
 extra step Wayland/XWayland desktops need).
 

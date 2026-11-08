@@ -110,7 +110,7 @@ grant_x11() {
       log_ok "xhost +local:docker"
     else
       log_warn "xhost +local:docker failed (no X server / DISPLAY?)."
-      log_warn "GUI apps (QGroundControl, Gazebo) may not be able to open a window."
+      log_warn "Gazebo may not be able to open its window."
     fi
   else
     log_warn "xhost not found -- skipping. GUI apps may not be able to open a window."
@@ -435,7 +435,7 @@ if (( ! should_run )); then
   echo "  docker exec -it $CONTAINER_NAME /entrypoint.sh"
   echo
   echo "See docker-compose.yml's comments for the extra X11 socket permission"
-  echo "step Wayland/XWayland desktops need for QGroundControl/Gazebo windows"
+  echo "step Wayland/XWayland desktops need for Gazebo windows"
   echo "to appear."
   exit 0
 fi

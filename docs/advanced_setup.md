@@ -28,7 +28,6 @@ Before using `UWBPX4Sim`, make sure the following are installed:
 - [ROS 2 Jazzy](https://docs.ros.org/en/jazzy/index.html)
 - [Gazebo Harmonic](https://gazebosim.org/docs/harmonic/ros_installation/)
 - [PX4 toolchain](https://docs.px4.io/main/en/dev_setup/dev_env_linux_ubuntu.html)
-- [QGroundControl](https://docs.qgroundcontrol.com/master/en/qgc-user-guide/releases/daily_builds.html)
 - [Micro XRCE-DDS Agent and Client](https://docs.px4.io/main/en/ros2/user_guide.html#setup-micro-xrce-dds-agent-client)
 - [tmux](https://github.com/tmux/tmux/wiki/Installing)
 - The `eliko_messages` ROS 2 package from [`eliko_ros`](https://github.com/robotics-upo/eliko_ros), required by the UGV offboard node to publish aggregated UWB range messages.
@@ -90,14 +89,12 @@ export GZ_WORLD=<your-world-name>
 
 - the ROS 2 workspace directory is either at `<path_to_UWBPX4Sim>/../..` (when using UWBPX4Sim as standalone) or `<path_to_UWBPX4Sim>/../../..` (when using UWBPX4Sim as a submodule of `mr-radio-localization`)
 - PX4 lives at `~/PX4-Autopilot`
-- the QGroundControl AppImage is located in `~/Desktop` or `~/Downloads`
 
 If your setup differs, override the paths before launching:
 
 ```bash
 export ROS_WS=/path/to/your_ws
 export PX4_DIR=/path/to/PX4-Autopilot
-export QGC_PATH=/path/to/QGroundControl.AppImage
 ```
 
 Then launch the simulation:
@@ -106,9 +103,10 @@ Then launch the simulation:
 ./simulator_launcher.sh
 ```
 
+No ground station is needed: the offboard nodes arm and fly the vehicles, and the launcher turns off PX4's ground-station check on every instance for the run. You can still connect QGroundControl yourself to monitor them.
+
 | Option | Effect |
 | --- | --- |
-| `--no-qgc` | Don't require or start QGroundControl; PX4's ground-station check is turned off for that run |
 | `--headless` | Run Gazebo without its GUI |
 | `--detach` | Don't attach to the tmux session; stop it with `tmux kill-session -t <session>` |
 
