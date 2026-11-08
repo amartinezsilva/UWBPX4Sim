@@ -242,6 +242,11 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
     def index():
         return send_from_directory(app.static_folder, "index.html")
 
+    # The repo's own logo, served from images/ rather than copied here.
+    @app.get("/logo.png")
+    def logo():
+        return send_from_directory(uwb_root / "images", "Logo.png")
+
     # -- layouts ---------------------------------------------------------
 
     @app.get("/api/layouts")

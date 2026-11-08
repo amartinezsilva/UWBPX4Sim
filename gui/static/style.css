@@ -22,7 +22,9 @@ body {
 header {
   padding: 1.25rem 1.5rem 0.5rem;
 }
-header h1 { margin: 0 0 0.2rem; font-size: 1.4rem; }
+header h1 { margin: 0 0 0.4rem; font-size: 1.4rem; display: flex; align-items: center; gap: 1rem; }
+header .logo { height: 72px; width: auto; max-width: 100%; border-radius: 10px; display: block; }
+header .page-name { color: var(--muted); font-weight: 600; }
 .subtitle { margin: 0; color: var(--muted); font-size: 0.9rem; }
 
 .tabs {

@@ -36,6 +36,8 @@ The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it c
 3. **Open a shell**: skip the menu and get a plain shell in the container.
 4. **Exit**: stops the container, and asks whether to remove it completely instead (default just stops it) -- everything else, including closing your terminal, leaves it running with your configuration intact. Run `./setup.sh` again any time to get back to this same menu.
 
+![The setup GUI: a layout with one UAV, one UGV and four static anchors](images/gui_setup.png)
+
 `docker-compose.yml` bind-mounts the whole repository (plus `ROS2/px4_sim_offboard/trajectories/` onto its installed path) from the host into the container, so editing a layout, a plugin-parameter preset, a custom world, a trajectory CSV, or the plugin source on the host takes effect the next time setup (or the simulation) runs -- no image rebuild needed.
 
 This image is also the base that [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization)'s own Docker image builds `FROM`, adding its radar/localization stack on top -- see that repo's `docker/` for the layered setup.
