@@ -138,7 +138,7 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
     # Read-only from the GUI: saving re-renders a preset from PARAM_GROUPS,
     # which would drop their explanatory comments -- tune one, then save it
     # under a new name instead.
-    BUILTIN_PRESETS = frozenset({"eliko_identification", "util_identification"})
+    BUILTIN_PRESETS = frozenset({"eliko_identification", "util_identification", "lps_twr_identification"})
 
     # (group label, [(key, default)]) -- defines both the canonical write
     # order/section comments for a rendered preset file and the ordered
@@ -188,6 +188,7 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
             ("gaussian_noise_mean_cm", 0.0),
             ("moving_outlier_probability", 0.0),
             ("moving_outlier_mean_cm", 30.0),
+            ("moving_outlier_min_speed_mps", 0.1),
             ("apply_pair_bias", False),
             ("bias_min_cm", -27.0),
             ("bias_max_cm", 20.0),

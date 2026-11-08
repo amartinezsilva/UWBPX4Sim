@@ -1,0 +1,71 @@
+# UWBGazeboSystem plugin parameters -- "lps_twr_identification" preset.
+#
+# Calibrated from the TWR flights of Pfeiffer et al.'s UWB dataset (TU Delft
+# Cyberzoo, Crazyflie 2.1 with Bitcraze's Loco Positioning System, DW1000,
+# 8 anchors, line of sight; https://doi.org/10.4121/14827680, CC0): the same
+# radio as util_identification, in TWR mode. One flight per trajectory was
+# used for fitting and the other six for validation. Flights only cover
+# 3.4-10 m in line of sight, so the long-range shape and the obstacle
+# parameters are util_identification's, not validated here. See
+# docs/measurement_model.md.
+#
+# Load via the setup GUI's "Plugin Parameters" tab (Preset dropdown), or
+# ./setup_simulator.sh --params lps_twr_identification.
+
+uwb_mode: twr
+topic: /uwb_gz_simulator/distances
+ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
+tdoa_topic: /uwb_gz_simulator/tdoa
+tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measured: 30 ranges per second per anchor (28.5-32.5 across flights).
+update_rate_hz: 30.0
+
+# Link budget and its long-range shape: from util_identification (flights
+# end at 10 m, L < 20 dB, short of where noise growth or dropout start).
+path_loss_exponent: 2.0
+max_link_loss_db: 37.5
+noise_start_loss_db: 23.5
+noise_end_loss_db: 37.5
+dropout_center_loss_db: 35.5
+dropout_width_db: 1.4
+
+# Noise floor: 8.3 cm per link in flight, fitted jointly with the outliers
+# and per-anchor offsets below. No consistent trend with distance within
+# anchors, so it stays flat.
+min_noise_stddev_cm: 8.3
+max_noise_stddev_cm: 50.0
+
+# Dropout floor: from util_identification (the logs hold the last range
+# between updates, so failed attempts can't be counted).
+min_dropout_probability: 0.02
+
+# Obstacles and materials: from util_identification (no NLOS flights).
+enable_nlos_dropout: false
+nlos_endpoint_margin_m: 0.02
+nlos_min_loss_db: 3.0
+body_shadow_max_loss_db: 10.0
+enable_material_attenuation: true
+carrier_frequency_ghz: 4.0
+material_metal_detour_loss_db: 20.0
+enable_dielectric_delay: false
+
+# Outliers: 35% of in-flight ranges read long by an exponential excess of
+# mean 14.7 cm, also while hovering (4.1% beyond 30 cm hovering, 0.6% on the
+# ground). 0.002 m/s counts a hovering SITL drone as moving (0.002-0.041 m/s)
+# and a parked robot as still (at most 0.001 m/s).
+moving_outlier_probability: 0.35
+moving_outlier_mean_cm: 14.7
+moving_outlier_min_speed_mps: 0.002
+
+# Received-power bias: 0.99 cm/dB (UTIL, same radio: 0.98), relative to
+# 16.6 dB (6.8 m), the flights' mean loss.
+power_bias_cm_per_db: 0.99
+power_bias_ref_loss_db: 16.6
+
+# Per-anchor offsets at 16.6 dB: -22.5 cm mean, 6.9 cm sd across the 8
+# anchors, stable between flights (train vs held-out correlation 0.99).
+# Drawn once per pair from a uniform with the same mean and sd.
+gaussian_noise_mean_cm: 0.0
+apply_pair_bias: true
+bias_min_cm: -34.4
+bias_max_cm: -10.5
