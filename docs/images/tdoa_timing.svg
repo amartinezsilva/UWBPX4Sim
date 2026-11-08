@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 370" width="760" height="370">
+<defs><marker id="ab" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#2a78d6"/></marker><marker id="ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#eb6834"/></marker><marker id="ag" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#666"/></marker></defs>
+<rect width="760" height="370" fill="#ffffff"/>
+<line x1="110" y1="70" x2="720" y2="70" stroke="#888" stroke-width="2"/>
+<line x1="110" y1="160" x2="720" y2="160" stroke="#888" stroke-width="2"/>
+<line x1="110" y1="250" x2="720" y2="250" stroke="#888" stroke-width="2"/>
+<text x="100" y="75" text-anchor="end" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >Anchor i</text>
+<text x="100" y="165" text-anchor="end" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >Tag</text>
+<text x="100" y="255" text-anchor="end" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >Anchor j</text>
+<line x1="170" y1="70" x2="238" y2="158" stroke="#2a78d6" stroke-width="2.2" marker-end="url(#ab)"/>
+<circle cx="170" cy="70" r="3.5" fill="#2a78d6"/>
+<text x="170" y="58" text-anchor="middle" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >T<tspan baseline-shift="sub" font-size="10">i</tspan> (sent)</text>
+<circle cx="240" cy="160" r="3.5" fill="#2a78d6"/>
+<text x="240" y="184" text-anchor="middle" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >r<tspan baseline-shift="sub" font-size="10">i</tspan> (received)</text>
+<line x1="400" y1="250" x2="498" y2="162" stroke="#eb6834" stroke-width="2.2" marker-end="url(#ao)"/>
+<circle cx="400" cy="250" r="3.5" fill="#eb6834"/>
+<text x="400" y="274" text-anchor="middle" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >T<tspan baseline-shift="sub" font-size="10">j</tspan> (sent)</text>
+<circle cx="500" cy="160" r="3.5" fill="#eb6834"/>
+<text x="500" y="148" text-anchor="middle" fill="#222" font-size="14" font-family="Helvetica, Arial, sans-serif" >r<tspan baseline-shift="sub" font-size="10">j</tspan> (received)</text>
+<text x="720" y="30" text-anchor="end" fill="#666" font-size="12" font-family="Helvetica, Arial, sans-serif" >each packet carries its send time</text>
+<line x1="110" y1="305" x2="720" y2="305" stroke="#666" stroke-width="1" marker-end="url(#ag)"/><text x="725" y="310" text-anchor="start" fill="#666" font-size="12" font-family="Helvetica, Arial, sans-serif" >time</text>
+<text x="380.0" y="345" text-anchor="middle" fill="#222" font-size="15" font-family="Helvetica, Arial, sans-serif" >d<tspan baseline-shift="sub" font-size="10">j</tspan> − d<tspan baseline-shift="sub" font-size="10">i</tspan> = c × ((r<tspan baseline-shift="sub" font-size="10">j</tspan> − r<tspan baseline-shift="sub" font-size="10">i</tspan>) − (T<tspan baseline-shift="sub" font-size="10">j</tspan> − T<tspan baseline-shift="sub" font-size="10">i</tspan>))</text>
+</svg>

@@ -28,17 +28,11 @@ Two kinds of node take part, and the same hardware can usually play either role 
 
 ### Two-way ranging (TWR)
 
-The tag and an anchor exchange messages and measure the **round trip**, so their clocks don't need to be synchronised [8]:
+The tag and an anchor exchange messages and measure the **round trip**, so their clocks don't need to be synchronised [8] (Figure 1):
 
-```mermaid
-sequenceDiagram
-    participant T as Tag
-    participant A as Anchor
-    T->>A: poll (sent at t1)
-    Note over A: waits a known reply time
-    A->>T: response (received at t2)
-    Note over T: distance = c × ((t2 − t1) − reply time) / 2
-```
+<img src="images/twr_timing.svg" alt="TWR timing: the tag sends a poll, the anchor replies after a known delay, and the round trip gives the distance" width="100%">
+
+*Figure 1: Two-way ranging. Time runs left to right; each arrow is a message, and its slope is the time of flight.*
 
 Each exchange gives **one distance per anchor-tag pair**. The two clocks run at slightly different rates, which adds an error during the reply time, so practical systems add a third message (double-sided TWR) to reduce it [11]. The tag actively ranges with each anchor in turn, so adding tags adds load: in Bitcraze's Loco Positioning System, TWR positions only one tag at a time [5].
 
@@ -48,17 +42,11 @@ Eliko's systems use a variant called **active-passive TWR (AP-TWR)** [15]. Accor
 
 The anchors keep a common timebase, by synchronising [8] or by tracking each other's clock drift [12]. From arrival times at two nodes, the system gets a **difference of distances**, $`d_j - d_i`$, rather than a distance. Each difference places the tag on a hyperboloid [1], so locating it in 3D takes at least four anchors: three independent differences for three unknown coordinates.
 
-In downlink TDoA, for example, each anchor sends a packet whose transmit time on the common timebase is known, and the tag timestamps its arrival:
+In downlink TDoA, for example, each anchor sends a packet whose transmit time on the common timebase is known, and the tag timestamps its arrival (Figure 2):
 
-```mermaid
-sequenceDiagram
-    participant I as Anchor i
-    participant T as Tag (listens only)
-    participant J as Anchor j
-    I->>T: packet sent at T_i, received at r_i
-    J->>T: packet sent at T_j, received at r_j
-    Note over T: d_j − d_i = c × ((r_j − r_i) − (T_j − T_i))
-```
+<img src="images/tdoa_timing.svg" alt="Downlink TDoA timing: two anchors send packets with their send times, and the tag records when each arrives" width="100%">
+
+*Figure 2: Downlink TDoA, drawn like Figure 1. The tag only listens.*
 
 Each arrival time is the transmit time plus the time of flight, $`r = T + d/c`$, so subtracting the two cancels the tag's own clock offset and leaves the difference of distances. Figure 3 of the UTIL paper [9] shows the full packet timing between a tag and two anchors, each with its own clock.
 
