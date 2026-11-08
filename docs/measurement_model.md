@@ -155,14 +155,6 @@ The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss ar
 
 The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `util_identification`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
 
-## Limitations
-
-- Box collisions are intersected exactly, including rotated ones; any other collision shape (meshes, cylinders, ...) falls back to its link's world-axis-aligned bounding box, which over-estimates the blocked length.
-- One straight ray per link: no explicit multipath, and no diffraction around obstacle edges (the metal detour loss is a constant, not computed from geometry). The moving outliers are a statistical stand-in, the same for every anchor and uncorrelated in time.
-- Overlapping obstacles of *different* materials each count their own chord length.
-- The outlier-heavy behaviour UTIL shows behind some plastic and cabinet obstacles (mostly accurate readings with occasional large misses) isn't modelled.
-- The TDOA reference anchor is fixed (lowest id), and clock synchronisation between anchors isn't simulated.
-
 ## Calibration
 
 ### Eliko preset (`eliko_identification`)
@@ -225,10 +217,10 @@ With an obstacle on the anchor-tag line (Figure 2, right), the simulation reprod
 | Wooden shelf | -16.8 / -16.6 | 2.15 |
 | Metal | -35.2 / -34.1 | 6.69 |
 
-- **Heavier obstacles shift the error more**, in reality and in the simulation. Simulated values average 20 seeds, because each run draws its own anchor offsets and a single run can move a point by about 4 cm.
-- **Hollow objects are over-predicted by a few cm.** UTIL only gives each object's outer shape, so the plastic container and the wooden cabinet are simulated as solid boxes, which overstates their loss. Plastic also crosses the NLOS threshold because of this.
-- **Obstacle effects vary with placement more than from sample to sample.** Moving the same metal obstacle changes the real shift by about 15 cm, while the spread at any one placement stays near 7 cm, against 5 cm in LOS. The simulated shift varies less between placements.
-- **An obstacle between the anchors barely matters.** The real error stays within 1 cm of LOS, except for plastic at 3.5 cm. The simulation doesn't model this link.
+- **Heavier obstacles shift the error more**, in reality and in the simulation. Simulated values average 20 seeds.
+- **Hollow objects are over-predicted by about 4 cm:** the plastic container and the wooden cabinet, which are simulated as solid boxes.
+- **Obstacle effects vary with placement more than from sample to sample.** Moving the same metal obstacle changes the real shift by about 15 cm, while the spread at any one placement stays near 7 cm, against 5 cm in LOS. The simulated shift varies less.
+- **An obstacle between the anchors barely matters.** The real error stays within 1 cm of LOS, except for plastic at 3.5 cm.
 
 #### Flight data
 
@@ -242,7 +234,7 @@ Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each
 
 - **The received-power bias holds:** 0.77 cm/dB real against 0.94 simulated.
 - **Moving tags have outliers that static ones don't.** Errors over 30 cm from the pair's median are almost absent in static data and make up 1-10 % of LOS flight data. The moving outlier term gives a uniform 3 %. It improved W1 from 5.20 to 3.07 cm raw, and by 1.3-2.1 cm on flights not used to fit it.
-- **Some anchors are much noisier than others in flight.** The cause isn't known, and the simulation treats all anchors alike, so its noise is too low for the worst ones.
+- **Some anchors are much noisier than others in flight**, which the simulation, treating all anchors alike, doesn't reproduce.
 - **Per-anchor offsets are larger in flight data:** about 4.5 cm against 2.1 cm simulated. Widening them fits flights better but worsens the static fit, so the static value was kept.
 
 **NLOS.** With one metal and three wooden boxes (Figure 4):
@@ -260,9 +252,35 @@ Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each
 - **Metal is right in sign and most of its scatter, but too large.** A blocked leg reads 28 cm long in reality and 58 cm in the simulation, because simulated noise grows steeply with total loss. Reducing that effect also removed the scatter and worsened the overall fit, so it was rejected.
 - **Obstacles don't stop measurements.** Blocked links keep 78-99 % of their sample rate, as the simulation does.
 - **Wood adds bias but no measurable scatter**, in reality and in the simulation.
-- **A direction-dependent bias hides the received-power bias.** Distance alone gives a slope of 0.04 cm/dB real against 0.98 simulated. Each anchor has a repeatable bias that depends on the direction to the tag, and removing it raises the real slope to 0.61 cm/dB (green in Figure 4; each flight is corrected with a fit on the others, and individual flights range from 0.22 to 0.90). So the received-power bias is still there, including on blocked legs, as the simulation assumes. The direction-dependent bias isn't specific to NLOS: it's also present in the LOS flights, at a similar size. It's less visible there because its effect on the slope varies between anchor installations, and the LOS figure pools several installations, so it mostly averages out, while these flights come from a single one. It isn't a fixed property of the hardware: it changes when the same anchor is reinstalled and when obstacles are added, so it seems to depend on each anchor's mounting and surroundings (UTIL reports pose-related biases for this chip). The simulation doesn't model it, which needs further work, and it accounts for only a small part of the extra noise below (10.9 to 10.2 cm).
-- **Overall noise is about twice the simulation's**, even on unblocked links. It isn't caused by the materials: most of it comes from the ceiling anchors of this installation, and two other installations match the simulation. The excess varies with position, so static tests, where the tag doesn't move, see it as a constant offset rather than spread. The simulation draws independent noise, so it can't reproduce this.
-- **Obstacle positions are approximate.** UTIL didn't survey them, so the simulated metal effect also depends on where they were assumed to be.
+- **A direction-dependent bias hides the received-power bias.** Distance alone gives a slope of 0.04 cm/dB real against 0.98 simulated. Each anchor has a repeatable bias that depends on the direction to the tag, and removing it raises the real slope to 0.61 cm/dB (green in Figure 4; each flight is corrected with a fit on the others, and individual flights range from 0.22 to 0.90). So the received-power bias is still there, including on blocked legs, as the simulation assumes. The same bias is present in the LOS flights, but there it mostly averages out over several anchor installations, while these flights come from a single one.
+- **Overall noise is about twice the simulation's**, even on unblocked links. It isn't caused by the materials: most of it comes from the ceiling anchors of this installation, and two other installations match the simulation. The excess varies with position, so static tests, where the tag doesn't move, see it as a constant offset rather than spread.
+
+## Sim-to-real gap
+
+What to keep in mind when moving from the simulator to real hardware. The numbers come from [Calibration](#calibration).
+
+**Simplified physics**
+- Multipath and diffraction are represented statistically, through the noise, NLOS folding and moving outliers, not geometrically: each link is one straight ray, so reflections off specific walls aren't traced, and metal's detour loss is a constant.
+- Obstacles are solid boxes. Hollow objects (containers, cabinets) are over-predicted, and a plastic box can even cross the NLOS threshold because of it. Non-box shapes use their bounding box, which over-estimates the blocked length, and overlapping obstacles of different materials each count their own chord.
+- TDOA uses a fixed reference anchor (lowest id). Clock synchronisation and the anchor-anchor link aren't simulated.
+
+**Installation-specific effects**
+- Each anchor has a repeatable bias that depends on the direction to the tag. It isn't a fixed property of the hardware: it changes when an anchor is reinstalled or obstacles are added, so it seems to depend on each anchor's mounting and surroundings (UTIL reports pose-related biases for this chip). It isn't modelled, and needs further work.
+- Real per-anchor offsets are about twice the simulated ones in flight, and some installations, or a few of their anchors, are much noisier. Static tests can't reveal either.
+
+**Statistical approximations**
+- Simulated noise is independent from sample to sample. Real errors are correlated over about a metre of travel.
+- Moving outliers are uniform, uncorrelated and the same for every anchor. Real rates vary by anchor, and some obstacles (plastic, cabinet) cause occasional large misses.
+- Real obstacle effects vary more with placement than simulated ones.
+- Each run draws its own anchor offsets, so one run can move results by about 4 cm. Average over seeds.
+
+**What the current data misses**
+- UTIL covers 0.5-6.5 m. Beyond that, noise, dropout and the linear received-power bias are extrapolated.
+- Eliko was measured in LOS below 10 m. Its curves up to 75 m follow the datasheet, its dropout shape isn't validated by measured dropouts, and its NLOS behaviour uses UTIL's obstacle values.
+- The plastic, cardboard and foam properties and the metal detour loss are assumptions, tested only on UTIL's objects. UTIL didn't survey its flight obstacles, so their simulated positions are approximate.
+- Both presets are for DW1000-based hardware (Loco, Eliko). Other radios need their own calibration.
+
+**In practice:** test estimators with more noise and outliers than the simulation produces, and recalibrate the preset with a LOS distance test and a short flight at the target site.
 
 ## Parameter reference
 
