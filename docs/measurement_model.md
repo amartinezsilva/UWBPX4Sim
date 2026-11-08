@@ -1,5 +1,7 @@
 # Measurement model
 
+New to UWB? Start with [UWB basics](uwb_basics.md), which explains ranging, TWR and TDoA, and the usual setups.
+
 The `UWBGazeboPlugin` system simulates UWB measurements between anchors and tags with a **link budget**. Every 100 ms of simulation time it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 8 dB, and a 20 cm concrete wall about 20 dB (at 4 GHz).
 
 Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The two shipped presets, `eliko_identification` (Eliko TWR, the default under `-y`) and `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset; see [Calibration](#calibration)), are read-only from the GUI: tune one and save it under a new name.
@@ -8,8 +10,8 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 
 `uwb_mode` selects the ranging scheme for the whole simulation:
 
-- **`twr`** (default) -- two-way ranging, one range per anchor-tag pair, published on `<topic>/aItJ` and `<ground_truth_topic>/aItJ` (anchor `I`, tag `J`; defaults `/uwb_gz_simulator/distances[_ground_truth]`). The offboard nodes re-package them into `eliko_messages/DistancesList`, the same format as the real Eliko driver.
-- **`tdoa`** -- time difference of arrival against a reference anchor, as in Bitcraze's Loco Positioning System, published on `<tdoa_topic>/aIaKtJ` and `<tdoa_ground_truth_topic>/aIaKtJ` (reference `I`, anchor `K`, tag `J`; defaults `/uwb_gz_simulator/tdoa[_ground_truth]`). There's no `eliko_messages` equivalent, so these stay on GZ topics only.
+- **`twr`** (default) -- one range per anchor-tag pair, published on `<topic>/aItJ` and `<ground_truth_topic>/aItJ` (anchor `I`, tag `J`; defaults `/uwb_gz_simulator/distances[_ground_truth]`). The offboard nodes re-package them into `eliko_messages/DistancesList`, the same format as the real Eliko driver.
+- **`tdoa`** -- one difference of distances per anchor against a reference anchor (downlink TDoA, as in Bitcraze's Loco Positioning System), published on `<tdoa_topic>/aIaKtJ` and `<tdoa_ground_truth_topic>/aIaKtJ` (reference `I`, anchor `K`, tag `J`; defaults `/uwb_gz_simulator/tdoa[_ground_truth]`). There's no `eliko_messages` equivalent, so these stay on GZ topics only.
 
 ## Link geometry
 

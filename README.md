@@ -88,5 +88,6 @@ The Gazebo plugin also works without PX4 or ROS 2, in your own Gazebo Harmonic w
 
 ## Documentation
 
+- [UWB basics](docs/uwb_basics.md): a short introduction to UWB ranging, TWR and TDoA, and common setups, for readers new to UWB.
 - [Measurement model](docs/measurement_model.md): equations, materials, all plugin parameters and calibration results.
 - [Advanced setup](docs/advanced_setup.md): running without Docker, full layout reference, adding vehicle types, manual installation and ROS 2 interfaces.
