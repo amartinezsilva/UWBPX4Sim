@@ -234,3 +234,29 @@ footer {
   gap: 1rem;
 }
 footer .hint { margin: 0; color: var(--muted); font-size: 0.8rem; }
+footer #continue-setup { white-space: nowrap; flex: none; }
+.build-option { display: flex; align-items: center; gap: 0.4rem; font-size: 0.9rem; white-space: nowrap; }
+.build-note { color: var(--muted); font-size: 0.8rem; }
+
+.overlay { position: fixed; inset: 0; background: rgba(20, 22, 26, 0.55); display: flex;
+  align-items: center; justify-content: center; padding: 1rem; z-index: 100; }
+.overlay[hidden] { display: none; }
+.progress-card { background: var(--panel, #fff); border-radius: 12px; padding: 1.25rem 1.5rem;
+  width: min(900px, 100%); max-height: 90vh; display: flex; flex-direction: column; gap: 0.6rem;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3); }
+.progress-head { display: flex; align-items: center; gap: 0.8rem; }
+.progress-head h2 { margin: 0; font-size: 1.15rem; }
+.progress-step { margin: 0; color: var(--muted); }
+.spinner { width: 22px; height: 22px; border-radius: 50%; border: 3px solid #d0d4da;
+  border-top-color: var(--accent); animation: spin 0.9s linear infinite; flex: none; }
+.spinner.done { animation: none; border-color: #1b8a4c; }
+.spinner.failed { animation: none; border-color: var(--danger); }
+@keyframes spin { to { transform: rotate(360deg); } }
+.progress-bar { height: 8px; background: #e6e8ec; border-radius: 4px; overflow: hidden; }
+.progress-bar[hidden] { display: none; }
+#progress-fill { height: 100%; width: 0; background: var(--accent); transition: width 0.4s; }
+#progress-log { margin: 0.4rem 0 0; max-height: 45vh; overflow: auto; background: #1e2024; color: #d8dbe0;
+  padding: 0.6rem; border-radius: 6px; font-size: 0.75rem; line-height: 1.35; white-space: pre-wrap; }
+.progress-final { margin: 0; font-weight: 600; }
+.progress-final.ok { color: #1b8a4c; }
+.progress-final.error { color: var(--danger); }

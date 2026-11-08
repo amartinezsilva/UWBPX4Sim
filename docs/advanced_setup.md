@@ -8,7 +8,7 @@ How to run without Docker, and reference for the layout file, the manual install
 - `models/uwb_meshes/`: UWB tag/anchor meshes added to the generated models
 - `models/custom_models/`: auto-generated per-robot UAV and UGV models with the desired UWB transceiver layouts
 - `ROS2/px4_sim_offboard/`: ROS 2 package for the PX4/Gazebo bridge and offboard-side nodes
-- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs, in both TWR and TDOA (the file in the repository is just a sample)
+- `ROS2/px4_sim_offboard/config/uwb_bridge.yaml`: generated GZ-to-ROS 2 bridge topics for all anchor-tag pairs, in both TWR and TDOA. Setup writes it from the chosen layout, so it isn't tracked in git.
 - `config/`: layout YAML files used for model generation and simulator spawning
 - `setup_simulator.sh`: guided setup script (models, plugin, plugin parameters, optional world, optional PX4 rebuild, ROS 2 workspace checks)
 - `simulator_launcher.sh`: tmux-based PX4 SITL launcher

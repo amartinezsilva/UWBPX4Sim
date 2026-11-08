@@ -550,18 +550,76 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
     await api("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout_file: filename, params_preset: presetName }),
+      body: JSON.stringify({
+        layout_file: filename,
+        params_preset: presetName,
+        build_px4: document.getElementById("build-px4").checked,
+      }),
     });
-    setStatus("continue-status", "Done -- continuing setup in your terminal. You can close this tab.", true);
+    setStatus("continue-status", "");
     document.getElementById("continue-setup").disabled = true;
+    followSetup();
   } catch (e) {
     setStatus("continue-status", e.message, false);
   }
 });
 
+// Shows setup_simulator.sh's progress until it ends, then closes the page.
+async function followSetup() {
+  const $ = (id) => document.getElementById(id);
+  $("progress-overlay").hidden = false;
+  let last = null;
+  while (true) {
+    try {
+      last = await api("/api/progress");
+    } catch (e) {
+      break; // setup stops the GUI once it has reported the end
+    }
+    $("progress-step").textContent = last.step;
+    const log = $("progress-log");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent = last.lines.join("\n");
+    if (atBottom) log.scrollTop = log.scrollHeight;
+    $("progress-bar").hidden = last.percent === null;
+    if (last.percent !== null) $("progress-fill").style.width = last.percent + "%";
+    if (last.state !== "running") break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  const final = $("progress-final");
+  $("progress-bar").hidden = true;
+  if (last && last.state === "done") {
+    $("progress-spinner").className = "spinner done";
+    $("progress-title").textContent = "Setup finished";
+    final.className = "progress-final ok";
+    final.textContent = "Launch the simulation from the terminal menu (option 2). This page will close.";
+    setTimeout(() => {
+      window.close();
+      final.textContent = "Launch the simulation from the terminal menu (option 2). You can close this tab.";
+    }, 3000);
+  } else if (last && last.state === "failed") {
+    $("progress-spinner").className = "spinner failed";
+    $("progress-title").textContent = "Setup failed";
+    final.className = "progress-final error";
+    final.textContent = `setup_simulator.sh stopped with exit code ${last.exit_code}. See the log above.`;
+  } else {
+    $("progress-spinner").className = "spinner failed";
+    $("progress-title").textContent = "Lost contact with setup";
+    final.className = "progress-final error";
+    final.textContent = "Check the terminal for how setup ended.";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
+
+// Re-compiling PX4 is required while the plugin hasn't been built in this container.
+api("/api/build-info").then((info) => {
+  if (info.plugin_built === false) {
+    document.getElementById("build-px4").checked = true;
+    document.getElementById("build-px4-note").textContent = "(required: the plugin isn't built yet)";
+  }
+}).catch(() => {});
 
 (async function init() {
   await Promise.all([
