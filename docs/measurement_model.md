@@ -6,6 +6,28 @@ The `UWBGazeboPlugin` system simulates UWB measurements between anchors and tags
 
 Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The three shipped presets, `eliko_identification` (Eliko TWR, the default under `-y`), `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset) and `lps_twr_identification` (calibrated from Bitcraze Loco Positioning TWR flights [Pfeiffer et al.]; see [Calibration](#calibration)), are read-only from the GUI: tune one and save it under a new name.
 
+## Contents
+
+- [Ranging modes and topics](#ranging-modes-and-topics)
+- [Measurement rate](#measurement-rate)
+- [Link geometry and budget](#link-geometry-and-budget)
+  - [Link geometry](#link-geometry)
+  - [Link budget](#link-budget)
+- [Noise, dropout and bias](#noise-dropout-and-bias)
+  - [Noise standard deviation and dropout probability](#noise-standard-deviation-and-dropout-probability)
+  - [Moving outliers](#moving-outliers)
+  - [Deterministic bias](#deterministic-bias)
+- [TWR measurement](#twr-measurement)
+- [TDOA measurement](#tdoa-measurement)
+- [Calibration](#calibration)
+  - [Eliko preset (`eliko_identification`)](#eliko-preset-eliko_identification)
+  - [UTIL preset (`util_identification`)](#util-preset-util_identification)
+  - [Loco Positioning TWR preset (`lps_twr_identification`)](#loco-positioning-twr-preset-lps_twr_identification)
+- [Sim-to-real gap](#sim-to-real-gap)
+- [Parameter reference](#parameter-reference)
+- [Material table](#material-table)
+- [References](#references)
+
 ## Ranging modes and topics
 
 `uwb_mode` selects the ranging scheme for the whole simulation:
@@ -18,27 +40,27 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 `update_rate_hz` sets how often every link is measured, from 1 to 75 Hz (default 10 Hz); values outside are clamped with a warning. Updates follow simulation time on a fixed schedule, so the rate is exact even when it doesn't divide the physics step.
 
 - **Hardware limit:** Eliko tags update at up to 75 Hz [Eliko-RTLS]. Bitcraze doesn't publish per-mode rates for its Loco Positioning System; one user reports about 62.5 updates per second with TDoA2 and 8 anchors [LPS-rate].
-- **Simulator cost:** the cost per update grows with the number of anchor-tag pairs and obstacles. In a benchmark at a 4 ms physics step, a typical scene (8 anchors, 2 tags, 20 obstacles) ran at 16x real time at 10 Hz and 14x at 75 Hz, against 18x without the plugin. A large one (16 anchors, 8 tags, 100 obstacles) dropped from 7.8x to 2.8x real time between 10 and 75 Hz. Results depend on the machine, and PX4 and ROS 2 add their own load.
+- **Simulator cost:** the cost per update grows with the number of anchor-tag pairs and obstacles. Results depend on the machine, and PX4 and ROS 2 add their own load.
 - **Every link is measured at the same time** at each update. Real systems take turns, so their rate per anchor-tag pair is lower: in UTIL's flights, about 4 measurements per second per pair.
-- **Calibration:** `eliko_identification` and `util_identification` were calibrated at 10 Hz, and `lps_twr_identification` at the 30 Hz its flights were recorded at. The noise, bias and outlier terms are per measurement, so they don't depend on the rate, and the moving-outlier threshold is a speed, not a step.
-- The aggregated `eliko_messages/DistancesList` from the UGV offboard node is still published at 10 Hz.
 
-## Link geometry
+## Link geometry and budget
+
+### Link geometry
 
 For a tag at $`\mathbf{p}_t`$ and an anchor at $`\mathbf{a}`$, the true range is $`d = \lVert \mathbf{p}_t - \mathbf{a} \rVert`$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles: exactly with box collisions (in each box's own, possibly rotated, frame), and through the link's world-axis-aligned bounding box (AABB) for any other shape. Chord lengths are merged per material, so overlapping links of one wall aren't counted twice:
 
 - $`\ell_m`$ -- chord length through obstacles of material $`m`$. Untagged obstacles are the `generic` material. With `enable_material_attenuation: true`, an obstacle's material comes from a `<uwb:material>` element inside one of its `<collision>`s or its `<model>`, or else from a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`. The most specific one wins: collision, link name, model, then model name. `<uwb:material>` is a custom SDF element, so declare its prefix on the root, `<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">` (SDF's own `<material>` only describes appearance). Names are case-insensitive. The known materials are in the [Material table](#material-table), and an unknown name logs a warning once and counts as `generic`.
 - $`\ell_{\text{body}}`$ -- chord length through the vehicles' `base_link`s.
 
-## Link budget
+### Link budget
 
 ```math
 L = \underbrace{10\, n \log_{10} \max(d, 1\,\mathrm{m})}_{L_d} \;+\; \underbrace{\sum_{m} \alpha_m \ell_m \;+\; L_{\text{metal}}\, \mathbf{1}[\ell_{\text{metal}} > 0] \;+\; \min\big(\alpha_{\text{generic}}\, \ell_{\text{body}},\ L_{\text{body}}\big)}_{L_{\text{obs}}}
 ```
 
 - $`L_d`$ is free-space path loss relative to 1 m, with path-loss exponent $`n`$ = `path_loss_exponent` (2 in free space).
-- $`\alpha_m`$ is material $`m`$'s attenuation rate in dB/m at the carrier frequency $`f`$ = `carrier_frequency_ghz`. For ITU-R P.2040 building materials (concrete, plasterboard, wood, glass), with relative permittivity $`\varepsilon_r = a`$ and conductivity $`\sigma_c = c\, f^{d}`$ S/m from that recommendation's Table 3, $`\alpha = 1636\, \sigma_c / \sqrt{\varepsilon_r}`$; for the other dielectrics, $`\alpha = 90.96\, f\, \sqrt{\varepsilon_r}\, \tan\delta`$ from their loss tangent. Override any rate as `material_<name>_attenuation_db_per_m`.
-- Metal isn't penetrated: the first path detours around it, costing $`L_{\text{metal}}`$ = `material_metal_detour_loss_db` once per link however many metal obstacles it crosses.
+- $`\alpha_m`$ is material $`m`$'s attenuation rate in dB/m at the carrier frequency $`f`$ = `carrier_frequency_ghz`. For ITU-R P.2040 building materials (concrete, plasterboard, wood, glass), with relative permittivity $`\varepsilon_r = a`$ and conductivity $`\sigma_c = c\, f^{d}`$ S/m from that recommendation's Table 3, $`\alpha = 1636\, \sigma_c / \sqrt{\varepsilon_r}`$; for the other dielectrics, $`\alpha = 90.96\, f\, \sqrt{\varepsilon_r}\, \tan\delta`$ from their loss tangent. The resulting rates are in the [Material table](#material-table). Override any rate as `material_<name>_attenuation_db_per_m`.
+- Metal isn't penetrated: the first path detours around it, costing $`L_{\text{metal}}`$ = `material_metal_detour_loss_db` (20 dB, see the [Material table](#material-table)) once per link however many metal obstacles it crosses.
 - The vehicles' own bodies use the generic rate, capped at $`L_{\text{body}}`$ = `body_shadow_max_loss_db` (a partial blockage by a chassis never kills the link on its own).
 
 A link is **NLOS** if $`L_{\text{obs}} \ge`$ `nlos_min_loss_db` (3 dB by default -- about 10 cm of generic wall at 4 GHz), and **LOS** otherwise. The NLOS regimes follow from where the total loss falls in the budget, so they depend on distance as well as on the obstacle:
@@ -50,9 +72,11 @@ A link is **NLOS** if $`L_{\text{obs}} \ge`$ `nlos_min_loss_db` (3 dB by default
 | Hard NLOS | NLOS and $`L_{\sigma 0} \le L < L_{\max}`$ | $`\sigma`$ grows, and $`p`$ too with `enable_nlos_dropout: true` |
 | Blackout | $`L \ge L_{\max}`$ | no measurement (with `enable_nlos_dropout: false`, only when distance alone reaches $`L_{\max}`$) |
 
-At the 3.7 m separation of the paper's NLOS experiment, generic walls of 0.25 m, 0.75 m and 1.2 m fall in Soft NLOS, Hard NLOS and Blackout respectively, as in that experiment; the same 0.25 m wall at 20 m is already Hard NLOS.
+At the 3.7 m separation of the paper's NLOS experiment, generic walls of 0.25 m, 0.75 m and 1.2 m fall in Soft NLOS, Hard NLOS and Blackout respectively, as in that experiment; the same 0.25 m wall at 20 m is already Hard NLOS. The [Material table](#material-table) lists more examples by material.
 
-## Noise standard deviation and dropout probability
+## Noise, dropout and bias
+
+### Noise standard deviation and dropout probability
 
 ```math
 \sigma = \sigma_{\min} \left(\frac{\sigma_{\max}}{\sigma_{\min}}\right)^{\mathrm{clamp}\left(\frac{L - L_{\sigma 0}}{L_{\sigma 1} - L_{\sigma 0}},\ 0,\ 1\right)}
@@ -79,11 +103,11 @@ Figure 1 shows both curves.
 
 *Figure 1: Noise standard deviation and dropout probability against the link budget, with the `eliko_identification` values. In both presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.*
 
-## Moving outliers
+### Moving outliers
 
 While either end of a link moves faster than `moving_outlier_min_speed_mps` (default 10 cm/s, 1 cm per update at 10 Hz), that link independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A link with both ends still is never affected, because UTIL's static recordings have almost no such samples while its flights do. UTIL's anchors never move, so applying this to moving anchors is an extrapolation. In the Loco TWR flights, outliers also occur while hovering, so `lps_twr_identification` lowers the threshold to 2 mm/s: in PX4 SITL that counts a hovering drone (2-41 mm/s) as moving and a parked robot (at most 1 mm/s) as still. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
 
-## Deterministic bias
+### Deterministic bias
 
 Each link also carries a deterministic range bias $`\beta`$ from two sources:
 
@@ -91,7 +115,7 @@ Each link also carries a deterministic range bias $`\beta`$ from two sources:
 \beta = \underbrace{\sum_{m \neq \text{metal}} \ell_m \left(\sqrt{\varepsilon_{r,m}} - 1\right)}_{\text{dielectric delay}} + \underbrace{k_P \left(L - L_P\right)}_{\text{received power}}
 ```
 
-- **Dielectric delay** -- a dielectric slows the signal to $`c/\sqrt{\varepsilon_r}`$ ($`\varepsilon_{r,m}`$ = `material_<name>_permittivity`). **Off by default** (`enable_dielectric_delay: false`): it holds for solid slabs, but on UTIL's NLOS data, where the obstacles are mostly-hollow objects represented as solid boxes, it over-predicts their shifts. `generic` has $`\varepsilon_r = 1`$ (no delay) even when enabled, since an untagged obstacle's real material is unknown.
+- **Dielectric delay** -- a dielectric slows the signal to $`c/\sqrt{\varepsilon_r}`$ ($`\varepsilon_{r,m}`$ = `material_<name>_permittivity`, values in the [Material table](#material-table)). **Off by default** (`enable_dielectric_delay: false`): it holds for solid slabs, but on UTIL's NLOS data, where the obstacles are mostly-hollow objects represented as solid boxes, it over-predicts their shifts. `generic` has $`\varepsilon_r = 1`$ (no delay) even when enabled, since an untagged obstacle's real material is unknown.
 - **Received power** -- this is also how metal shifts a measurement: it has no bias of its own, because on UTIL's NLOS data the detour loss's power bias and NLOS folding already reproduce metal's shift (-34.2 cm predicted vs -35.2 cm real). The DW1000's timestamp has a bias that varies with received signal level, weaker signals reading longer (Decawave application note APS011, Section 3 and Table 2). It's modelled as linear in the loss, $`k_P`$ = `power_bias_cm_per_db` per dB relative to $`L_P`$ = `power_bias_ref_loss_db`; in TDOA, $`L_P`$ cancels between the two legs and only $`k_P`$ matters. Off by default; `util_identification` fits $`k_P`$ from UTIL's LOS distance test. APS011's curve saturates, so the linear form holds only over the fitted range (1-6.5 m).
 
 ## TWR measurement
@@ -140,40 +164,6 @@ d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \math
 - **NLOS errors keep their sign.** NLOS on anchor $`j`$'s leg pushes $`\tilde d_{ij}`$ up; NLOS on the reference leg pulls *every* $`\tilde d_{ij}`$ of that tag down.
 - $`\mu`$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($`b_j - b_i`$), not per pair.
 - For LOS legs, $`\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2`$, which is why `util_identification` derives its per-link $`\sigma`$ as the measured TDOA spread divided by $`\sqrt{2}`$. Both modes share the same per-link model, so switching modes needs no recalibration.
-
-## Material table
-
-Attenuation rates $`\alpha`$ (dB/m) at DW1000 channels 2 and 5, and relative permittivity:
-
-| Material | $`\varepsilon_r`$ | $`\alpha`$, 4 GHz | $`\alpha`$, 6.5 GHz | Source |
-| --- | ---: | ---: | ---: | --- |
-| `generic` (untagged) | 1.00 | 31.0 | 48.8 | plasterboard rate, no excess delay |
-| `plasterboard` | 2.73 | 31.0 | 48.8 | ITU-R P.2040 |
-| `concrete` | 5.24 | 97.7 | 142.8 | ITU-R P.2040 |
-| `wood` | 1.99 | 24.1 | 40.5 | ITU-R P.2040 |
-| `glass` | 6.31 | 15.0 | 28.8 | ITU-R P.2040 |
-| `plastic` | 2.50 | 5.8 | 9.3 | $`\tan\delta = 0.01`$ |
-| `cardboard` | 1.20 | 1.2 | 1.9 | $`\tan\delta = 0.003`$ (mostly air) |
-| `foam` | 1.05 | 0.2 | 0.3 | $`\tan\delta = 0.0005`$ |
-| `metal` | -- | -- | -- | detour: 20 dB loss |
-
-The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss aren't from a standard: they're assumptions, tested on UTIL's NLOS objects and flights. Some resulting links with `eliko_identification`'s noise and dropout curves, with `enable_nlos_dropout: true` to show the full budget (no deterministic bias, since that preset has no power bias and the delay and detour bias are off):
-
-| Link | $`L_{\text{obs}}`$ (dB) | $`L`$ (dB) | Regime | $`\sigma`$ (cm) | $`p`$ |
-| --- | ---: | ---: | --- | ---: | ---: |
-| LOS, 5 m / 40 m / 70 m | 0 | 14.0 / 32.0 / 36.9 | LOS | 12.0 / 28.7 / 47.0 | 0.020 / 0.112 / 0.908 |
-| generic 0.25 m, 3.7 m | 7.7 | 19.1 | Soft NLOS | 12.0 | 0.020 |
-| generic 0.25 m, 20 m | 7.7 | 33.8 | Hard NLOS | 34.1 | 0.298 |
-| generic 0.5 m, 3.7 m | 15.5 | 26.8 | Hard NLOS | 16.9 | 0.022 |
-| generic 0.75 m, 3.7 m | 23.2 | 34.6 | Hard NLOS | 37.1 | 0.439 |
-| generic 1.0 m, 3.7 m | 31.0 | 42.4 | Blackout | -- | 1 |
-| foam / cardboard 0.3 m, glass 6 mm, 5 m | < 1 | 14.0-14.3 | LOS | 12.0 | 0.020 |
-| plastic 0.3 m, 5 m | 1.7 | 15.7 | LOS | 12.0 | 0.020 |
-| wood 0.3 m, 5 m | 7.2 | 21.2 | Soft NLOS | 12.0 | 0.020 |
-| concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.255 |
-| metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.330 |
-
-The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `util_identification`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
 
 ## Calibration
 
@@ -390,6 +380,40 @@ What to keep in mind when moving from the simulator to real hardware. The number
 | `random_seed` | noise/bias seed; `0` = fixed default seed | `0` |
 
 The per-material overrides aren't shown in the setup GUI (saving from it would freeze the frequency-derived rates); add them to a preset by hand.
+
+## Material table
+
+Attenuation rates $`\alpha`$ (dB/m) at DW1000 channels 2 and 5, and relative permittivity:
+
+| Material | $`\varepsilon_r`$ | $`\alpha`$, 4 GHz | $`\alpha`$, 6.5 GHz | Source |
+| --- | ---: | ---: | ---: | --- |
+| `generic` (untagged) | 1.00 | 31.0 | 48.8 | plasterboard rate, no excess delay |
+| `plasterboard` | 2.73 | 31.0 | 48.8 | ITU-R P.2040 |
+| `concrete` | 5.24 | 97.7 | 142.8 | ITU-R P.2040 |
+| `wood` | 1.99 | 24.1 | 40.5 | ITU-R P.2040 |
+| `glass` | 6.31 | 15.0 | 28.8 | ITU-R P.2040 |
+| `plastic` | 2.50 | 5.8 | 9.3 | $`\tan\delta = 0.01`$ |
+| `cardboard` | 1.20 | 1.2 | 1.9 | $`\tan\delta = 0.003`$ (mostly air) |
+| `foam` | 1.05 | 0.2 | 0.3 | $`\tan\delta = 0.0005`$ |
+| `metal` | -- | -- | -- | detour: 20 dB loss |
+
+The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss aren't from a standard: they're assumptions, tested on UTIL's NLOS objects and flights. Some resulting links with `eliko_identification`'s noise and dropout curves, with `enable_nlos_dropout: true` to show the full budget (no deterministic bias, since that preset has no power bias and the delay and detour bias are off):
+
+| Link | $`L_{\text{obs}}`$ (dB) | $`L`$ (dB) | Regime | $`\sigma`$ (cm) | $`p`$ |
+| --- | ---: | ---: | --- | ---: | ---: |
+| LOS, 5 m / 40 m / 70 m | 0 | 14.0 / 32.0 / 36.9 | LOS | 12.0 / 28.7 / 47.0 | 0.020 / 0.112 / 0.908 |
+| generic 0.25 m, 3.7 m | 7.7 | 19.1 | Soft NLOS | 12.0 | 0.020 |
+| generic 0.25 m, 20 m | 7.7 | 33.8 | Hard NLOS | 34.1 | 0.298 |
+| generic 0.5 m, 3.7 m | 15.5 | 26.8 | Hard NLOS | 16.9 | 0.022 |
+| generic 0.75 m, 3.7 m | 23.2 | 34.6 | Hard NLOS | 37.1 | 0.439 |
+| generic 1.0 m, 3.7 m | 31.0 | 42.4 | Blackout | -- | 1 |
+| foam / cardboard 0.3 m, glass 6 mm, 5 m | < 1 | 14.0-14.3 | LOS | 12.0 | 0.020 |
+| plastic 0.3 m, 5 m | 1.7 | 15.7 | LOS | 12.0 | 0.020 |
+| wood 0.3 m, 5 m | 7.2 | 21.2 | Soft NLOS | 12.0 | 0.020 |
+| concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.255 |
+| metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.330 |
+
+The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `util_identification`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
 
 ## References
 
