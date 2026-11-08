@@ -71,7 +71,16 @@ static_anchors:                                            # optional, not on a 
 
 Any robot can carry `tags`, `anchors` or both. Tag ids must be unique across the layout, and so must anchor ids. `uavs` and `ugvs` are optional, as long as there is at least one tag and one anchor. See [`config/`](config/) for complete examples. Build layouts from the setup GUI or edit the files directly, then run setup again.
 
-To mark an obstacle's material, add a `__material_<name>` suffix to its model name in the world, e.g. `wall_1__material_concrete`.
+To mark an obstacle's material, add a `<uwb:material>` element to its model (or to one of its collisions), and declare the `uwb` prefix on the world's `<sdf>` root:
+
+```xml
+<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">
+  ...
+  <model name="wall_1">
+    <uwb:material>concrete</uwb:material>
+```
+
+A `__material_<name>` suffix on the model name, e.g. `wall_1__material_concrete`, also still works. See the [measurement model](docs/measurement_model.md#link-geometry) for details.
 
 ## Output topics
 

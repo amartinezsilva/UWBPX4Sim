@@ -43,7 +43,7 @@ Values are in centimetres. The true distances are on `/uwb_gz_simulator/distance
 - **Give obstacles `<collision>` geometry.** Objects with only a `<visual>` don't block the signal. Boxes are exact, and other shapes use their axis-aligned bounding box, which over-estimates them.
 - **Name the floor `ground_plane`.** The plugin skips that exact name. A plane with any other name still works, but Gazebo logs a warning at every update.
 
-To mark an obstacle's material, add a `__material_<name>` suffix to its model name, e.g. `wall_1__material_concrete`, and set `enable_material_attenuation` to `true`.
+To mark an obstacle's material, add `<uwb:material>concrete</uwb:material>` inside its `<model>` or one of its `<collision>`s, declare `xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim"` on the `<sdf>` root, and set `enable_material_attenuation` to `true`. A `__material_<name>` suffix on the model name, e.g. `wall_1__material_concrete`, also works.
 
 ## Using it from ROS 2
 

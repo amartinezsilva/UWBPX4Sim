@@ -26,6 +26,8 @@
 #include <gz/sim/EntityComponentManager.hh>
 #include <gz/math/Pose3.hh>
 #include <sdf/Box.hh>
+#include <sdf/Collision.hh>
+#include <sdf/Model.hh>
 #include <sdf/Element.hh>
 #include <sdf/Geometry.hh>
 
@@ -85,25 +87,40 @@ constexpr double kPositiveEpsilon = 1e-6;
         [](const unsigned char c) { return std::isdigit(c) != 0; });
   }
 
-  // Obstacle material tagging follows the same naming-convention style as
-  // extractSensorId above (e.g. "uwb_tag_1") rather than a custom SDF
-  // element: an obstacle's link OR model name carries a "__material_<name>"
-  // suffix, e.g. "wall_1__material_metal". Checked against both names so
-  // either the model or an individual link/collision within it can carry
-  // the tag, whichever is more convenient for a given world's authoring.
-  // Returns empty (no match), so the caller can treat "no tag at all" and
-  // "tag not in the material table" uniformly as the generic material.
+  std::string toLower(std::string _s)
+  {
+    std::transform(_s.begin(), _s.end(), _s.begin(),
+                   [](const unsigned char c) { return std::tolower(c); });
+    return _s;
+  }
+
+  // Fallback material tag: a "__material_<name>" suffix on a link or model
+  // name, e.g. "wall_1__material_metal". Empty if there's none.
   std::string extractMaterialName(const std::string &_name)
   {
     static const std::string kMarker = "__material_";
     const auto pos = _name.rfind(kMarker);
     if (pos == std::string::npos)
       return "";
+    return toLower(_name.substr(pos + kMarker.size()));
+  }
 
-    std::string material = _name.substr(pos + kMarker.size());
-    std::transform(material.begin(), material.end(), material.begin(),
-                   [](const unsigned char c) { return std::tolower(c); });
-    return material;
+  // Preferred material tag: a custom SDF element directly inside a
+  // <collision> or <model>, e.g. <uwb:material>metal</uwb:material>. Custom
+  // elements need a namespace prefix, declared on the <sdf> root as
+  // xmlns:uwb="...". (SDF's own <material> is visual appearance only.)
+  // Empty if there's none.
+  const std::string kMaterialElement = "uwb:material";
+  std::string customMaterialName(const sdf::ElementPtr &_element)
+  {
+    if (!_element || !_element->HasElement(kMaterialElement))
+      return "";
+    std::string material = _element->FindElement(kMaterialElement)->Get<std::string>();
+    const auto first = material.find_first_not_of(" \t\n\r");
+    const auto last = material.find_last_not_of(" \t\n\r");
+    if (first == std::string::npos)
+      return "";
+    return toLower(material.substr(first, last - first + 1));
   }
 
   // Material of untagged obstacles (and of every obstacle with the material
@@ -914,14 +931,37 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 	{
 		for (const auto &linkEntity : obstacleLinks)
 		{
+			// Most specific first: <uwb:material> on one of the link's
+			// collisions, the link name's suffix, <uwb:material> on the model,
+			// then the model name's suffix.
 			std::string materialName;
-			const auto linkNameComp = ecm.Component<gz::sim::components::Name>(linkEntity);
-			if (linkNameComp)
-				materialName = extractMaterialName(linkNameComp->Data());
+			for (const auto &collision :
+			     ecm.ChildrenByComponents(linkEntity, gz::sim::components::Collision()))
+			{
+				const auto element = ecm.Component<gz::sim::components::CollisionElement>(collision);
+				if (element)
+					materialName = customMaterialName(element->Data().Element());
+				if (!materialName.empty())
+					break;
+			}
 
 			if (materialName.empty())
 			{
-				const auto parentEntity = ecm.ParentEntity(linkEntity);
+				const auto linkNameComp = ecm.Component<gz::sim::components::Name>(linkEntity);
+				if (linkNameComp)
+					materialName = extractMaterialName(linkNameComp->Data());
+			}
+
+			const auto parentEntity = ecm.ParentEntity(linkEntity);
+			if (materialName.empty())
+			{
+				const auto modelSdf = ecm.Component<gz::sim::components::ModelSdf>(parentEntity);
+				if (modelSdf)
+					materialName = customMaterialName(modelSdf->Data().Element());
+			}
+
+			if (materialName.empty())
+			{
 				const auto modelNameComp = ecm.Component<gz::sim::components::Name>(parentEntity);
 				if (modelNameComp)
 					materialName = extractMaterialName(modelNameComp->Data());
