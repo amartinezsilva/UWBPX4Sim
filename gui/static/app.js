@@ -314,8 +314,9 @@ document.getElementById("layout-load").addEventListener("click", async () => {
       static_anchors: data.static_anchors || [],
       world: data.world || "",
     };
-    layout.uavs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UAV_OFFBOARD))));
-    layout.ugvs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UGV_OFFBOARD))));
+    // Fields a layout leaves out show their defaults, which match configure_uwb_layout.py's.
+    layout.uavs.forEach((v) => (v.offboard = { ...DEFAULT_UAV_OFFBOARD, ...(v.offboard || {}) }));
+    layout.ugvs.forEach((v) => (v.offboard = { ...DEFAULT_UGV_OFFBOARD, ...(v.offboard || {}) }));
     renderVehicles();
     document.getElementById("layout-filename").value = name;
     document.getElementById("world-input").value = layout.world;
