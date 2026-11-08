@@ -1,16 +1,16 @@
-# UWBGazeboSystem plugin parameters -- "lps_twr_identification" preset.
+# UWBGazeboSystem plugin parameters -- "lps_twr" preset.
 #
 # Calibrated from the TWR flights of Pfeiffer et al.'s UWB dataset (TU Delft
 # Cyberzoo, Crazyflie 2.1 with Bitcraze's Loco Positioning System, DW1000,
 # 8 anchors, line of sight; https://doi.org/10.4121/14827680, CC0): the same
-# radio as util_identification, in TWR mode. One flight per trajectory was
+# radio as lps_tdoa, in TWR mode. One flight per trajectory was
 # used for fitting and the other six for validation. Flights only cover
 # 3.4-10 m in line of sight, so the long-range shape and the obstacle
-# parameters are util_identification's, not validated here. See
+# parameters are lps_tdoa's, not validated here. See
 # docs/measurement_model.md.
 #
 # Load via the setup GUI's "Plugin Parameters" tab (Preset dropdown), or
-# ./setup_simulator.sh --params lps_twr_identification.
+# ./setup_simulator.sh --params lps_twr.
 
 uwb_mode: twr
 topic: /uwb_gz_simulator/distances
@@ -20,7 +20,7 @@ tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
 # Measured: 30 ranges per second per anchor (28.5-32.5 across flights).
 update_rate_hz: 30.0
 
-# Link budget and its long-range shape: from util_identification (flights
+# Link budget and its long-range shape: from lps_tdoa (flights
 # end at 10 m, L < 20 dB, short of where noise growth or dropout start).
 path_loss_exponent: 2.0
 max_link_loss_db: 37.5
@@ -35,11 +35,11 @@ dropout_width_db: 1.4
 min_noise_stddev_cm: 8.3
 max_noise_stddev_cm: 50.0
 
-# Dropout floor: from util_identification (the logs hold the last range
+# Dropout floor: from lps_tdoa (the logs hold the last range
 # between updates, so failed attempts can't be counted).
 min_dropout_probability: 0.02
 
-# Obstacles and materials: from util_identification (no NLOS flights).
+# Obstacles and materials: from lps_tdoa (no NLOS flights).
 enable_nlos_dropout: false
 nlos_endpoint_margin_m: 0.02
 nlos_min_loss_db: 3.0

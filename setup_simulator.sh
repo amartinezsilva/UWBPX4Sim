@@ -311,7 +311,7 @@ select_params_preset() {
   fi
 
   if (( ASSUME_YES )); then
-    default="$PARAMS_PRESETS_DIR/eliko_identification.yaml"
+    default="$PARAMS_PRESETS_DIR/eliko_twr.yaml"
     for i in "${!presets[@]}"; do
       if [[ "${presets[$i]}" == "$default" ]]; then
         PARAMS_PRESET="$(preset_name_from_path "$default")"
@@ -374,10 +374,10 @@ Options:
                        first found, under -y)
   --params NAME|PATH  Plugin-parameter preset to sync into PX4's server.config:
                        a name under uwb_gazebo_plugin/presets/ (e.g.
-                       util_identification) or a path to a preset YAML (also
+                       lps_tdoa) or a path to a preset YAML (also
                        settable via UWB_PARAMS_PRESET). If omitted, uses the
                        one picked in the GUI, or lists the presets and prompts
-                       you to pick one (auto-selects eliko_identification, or
+                       you to pick one (auto-selects eliko_twr, or
                        the first found, under -y)
   --no-gui            Skip the browser GUI and go straight to the terminal
                        layout/preset/world pickers

@@ -13,10 +13,26 @@ A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot
 ## Features
 
 - **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance and by the obstacles in the way, including their material. See [Measurement model](docs/measurement_model.md).
-- **Calibrated presets**: `eliko_identification` (Eliko, TWR), `util_identification` (UTIL dataset, TDOA) and `lps_twr_identification` (Bitcraze Loco Positioning, TWR). Tune one and save your own from the setup GUI.
+- **Calibrated presets**, one per system and mode: `eliko_twr` (Eliko, TWR), `lps_tdoa` (Bitcraze Loco Positioning, TDOA) and `lps_twr` (Bitcraze Loco Positioning, TWR). Tune one and save your own from the setup GUI.
 - **Multi-robot layouts** from one YAML file: UAVs and UGVs carrying any mix of tags and anchors, plus anchors fixed in the world. Vehicle models and the ROS 2 bridge are generated from it.
 - **Guided setup** with a browser GUI, a one-command **launcher**, and **RViz** showing the robots, transceivers and live UWB links for any layout.
 - **ROS 2 offboard nodes** that fly the UAVs and drive the UGVs along CSV trajectories.
+
+## Calibration datasets
+
+Each preset is calibrated from a real UWB dataset (details and validation in [Measurement model: Calibration](docs/measurement_model.md#calibration)):
+
+| Preset | Dataset | UWB system | Mode | Conditions |
+| --- | --- | --- | --- | --- |
+| `eliko_twr` | Eliko identification [1] | Eliko KIO RTLS | TWR | LOS |
+| `lps_tdoa` | UTIL identification dataset [2] | Bitcraze Loco Positioning (DWM1000) | TDOA | LOS and NLOS |
+| `lps_twr` | Pfeiffer et al. UWB dataset [3] | Bitcraze Loco Positioning (DWM1000) | TWR | LOS |
+
+Pfeiffer et al.'s TDoA flights [3] were also used to test the Loco Positioning TDOA preset on a second installation.
+
+1. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", 2025. [Paper](https://arxiv.org/abs/2509.26558), [data](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/KNKWMJ).
+2. W. Zhao, A. Goudar, X. Qiao, A. P. Schoellig, "UTIL: An Ultra-wideband Time-difference-of-arrival Indoor Localization Dataset", *IJRR*, 2024. [Paper](https://arxiv.org/abs/2203.14471), [data](https://github.com/utiasDSL/util-uwb-dataset).
+3. S. Pfeiffer, C. de Wagter, G. C. H. E. de Croon, "A Computationally Efficient Moving Horizon Estimator for Ultra-Wideband Localization on Small Quadrotors", *IEEE RA-L*, 2021. [Paper](https://doi.org/10.1109/LRA.2021.3095519), [data](https://doi.org/10.4121/14827680).
 
 ## Getting started
 

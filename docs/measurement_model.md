@@ -4,7 +4,7 @@ New to UWB? Start with [UWB basics](uwb_basics.md), which explains ranging, TWR 
 
 The `UWBGazeboPlugin` system simulates UWB measurements between anchors and tags with a **link budget**. At every update (`update_rate_hz`, 10 Hz by default) it computes, for each tag-anchor link, the excess loss $`L`$ (in dB) from free-space path loss plus every obstacle the line of sight crosses; $`L`$ sets the noise standard deviation $`\sigma`$ and the dropout probability $`p`$. It then publishes a ground truth and a simulated measurement: one link per TWR range, two links per TDOA value. Because distance and obstacles add up in the same dB budget, their relative influence follows from physical magnitudes: doubling the distance costs 6 dB, a 25 cm interior wall about 8 dB, and a 20 cm concrete wall about 20 dB (at 4 GHz).
 
-Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The three shipped presets, `eliko_identification` (Eliko TWR, the default under `-y`), `util_identification` (calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) TDOA dataset) and `lps_twr_identification` (calibrated from Bitcraze Loco Positioning TWR flights [Pfeiffer et al.]; see [Calibration](#calibration)), are read-only from the GUI: tune one and save it under a new name.
+Parameters are introduced below as `code` next to the symbol they set; all of them are listed in [Parameter reference](#parameter-reference). They live in a preset under `uwb_gazebo_plugin/presets/` (a plain `key: value` file; keys left out use the compiled-in defaults), which `./setup_simulator.sh` syncs into the plugin's block in PX4's `server.config` on every run -- pick one with `--params <name>`, in the setup GUI's "Plugin Parameters" tab, or from the terminal picker. The three shipped presets, one per system and mode, are `eliko_twr` (Eliko TWR, the default under `-y`), `lps_tdoa` (Bitcraze Loco Positioning TDOA, calibrated from the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset) and `lps_twr` (Loco Positioning TWR, calibrated from flights by Pfeiffer et al.); see [Calibration](#calibration). They are read-only from the GUI: tune one and save it under a new name.
 
 ## Contents
 
@@ -20,9 +20,9 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 - [TWR measurement](#twr-measurement)
 - [TDOA measurement](#tdoa-measurement)
 - [Calibration](#calibration)
-  - [Eliko preset (`eliko_identification`)](#eliko-preset-eliko_identification)
-  - [UTIL preset (`util_identification`)](#util-preset-util_identification)
-  - [Loco Positioning TWR preset (`lps_twr_identification`)](#loco-positioning-twr-preset-lps_twr_identification)
+  - [Eliko TWR preset (`eliko_twr`)](#eliko-twr-preset-eliko_twr)
+  - [Loco Positioning TDOA preset (`lps_tdoa`)](#loco-positioning-tdoa-preset-lps_tdoa)
+  - [Loco Positioning TWR preset (`lps_twr`)](#loco-positioning-twr-preset-lps_twr)
 - [Sim-to-real gap](#sim-to-real-gap)
 - [Parameter reference](#parameter-reference)
 - [Material table](#material-table)
@@ -101,11 +101,11 @@ Figure 1 shows both curves.
 
 ![Noise standard deviation and dropout probability against the link budget](images/link_budget_curves.png)
 
-*Figure 1: Noise standard deviation and dropout probability against the link budget, with the `eliko_identification` values. In both presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.*
+*Figure 1: Noise standard deviation and dropout probability against the link budget, with the `eliko_twr` values. In all presets $`L_{\sigma 1}`$ and $`L_{\max}`$ are the same, so $`\sigma`$ reaches $`\sigma_{\max}`$ just as the link closes.*
 
 ### Moving outliers
 
-While either end of a link moves faster than `moving_outlier_min_speed_mps` (default 10 cm/s, 1 cm per update at 10 Hz), that link independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A link with both ends still is never affected, because UTIL's static recordings have almost no such samples while its flights do. UTIL's anchors never move, so applying this to moving anchors is an extrapolation. In the Loco TWR flights, outliers also occur while hovering, so `lps_twr_identification` lowers the threshold to 2 mm/s: in PX4 SITL that counts a hovering drone (2-41 mm/s) as moving and a parked robot (at most 1 mm/s) as still. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
+While either end of a link moves faster than `moving_outlier_min_speed_mps` (default 10 cm/s, 1 cm per update at 10 Hz), that link independently reads long with probability $`p_o`$ = `moving_outlier_probability`, by an exponentially distributed excess of mean $`m_o`$ = `moving_outlier_mean_cm`. The excess is added to the noise $`\tilde n`$ defined below. A link with both ends still is never affected, because UTIL's static recordings have almost no such samples while its flights do. UTIL's anchors never move, so applying this to moving anchors is an extrapolation. In the Loco TWR flights, outliers also occur while hovering, so `lps_twr` lowers the threshold to 2 mm/s: in PX4 SITL that counts a hovering drone (2-41 mm/s) as moving and a parked robot (at most 1 mm/s) as still. Off by default ($`p_o = 0`$). This is an empirical term: it reproduces the error distribution, but the physical cause isn't established.
 
 ### Deterministic bias
 
@@ -116,7 +116,7 @@ Each link also carries a deterministic range bias $`\beta`$ from two sources:
 ```
 
 - **Dielectric delay** -- a dielectric slows the signal to $`c/\sqrt{\varepsilon_r}`$ ($`\varepsilon_{r,m}`$ = `material_<name>_permittivity`, values in the [Material table](#material-table)). **Off by default** (`enable_dielectric_delay: false`): it holds for solid slabs, but on UTIL's NLOS data, where the obstacles are mostly-hollow objects represented as solid boxes, it over-predicts their shifts. `generic` has $`\varepsilon_r = 1`$ (no delay) even when enabled, since an untagged obstacle's real material is unknown.
-- **Received power** -- this is also how metal shifts a measurement: it has no bias of its own, because on UTIL's NLOS data the detour loss's power bias and NLOS folding already reproduce metal's shift (-34.2 cm predicted vs -35.2 cm real). The DW1000's timestamp has a bias that varies with received signal level, weaker signals reading longer (Decawave application note APS011, Section 3 and Table 2). It's modelled as linear in the loss, $`k_P`$ = `power_bias_cm_per_db` per dB relative to $`L_P`$ = `power_bias_ref_loss_db`; in TDOA, $`L_P`$ cancels between the two legs and only $`k_P`$ matters. Off by default; `util_identification` fits $`k_P`$ from UTIL's LOS distance test. APS011's curve saturates, so the linear form holds only over the fitted range (1-6.5 m).
+- **Received power** -- this is also how metal shifts a measurement: it has no bias of its own, because on UTIL's NLOS data the detour loss's power bias and NLOS folding already reproduce metal's shift (-34.2 cm predicted vs -35.2 cm real). The DW1000's timestamp has a bias that varies with received signal level, weaker signals reading longer (Decawave application note APS011, Section 3 and Table 2). It's modelled as linear in the loss, $`k_P`$ = `power_bias_cm_per_db` per dB relative to $`L_P`$ = `power_bias_ref_loss_db`; in TDOA, $`L_P`$ cancels between the two legs and only $`k_P`$ matters. Off by default; `lps_tdoa` fits $`k_P`$ from UTIL's LOS distance test. APS011's curve saturates, so the linear form holds only over the fitted range (1-6.5 m).
 
 ## TWR measurement
 
@@ -136,7 +136,7 @@ n & \text{otherwise}
 - $`b_{jt} \sim \mathcal{U}(b_{\min}, b_{\max})`$, with $`b_{\min}, b_{\max}`$ = `bias_min_cm`, `bias_max_cm`, is drawn once per pair and kept for the whole run when `apply_pair_bias` is on (0 otherwise).
 - Folding $`n`$ in NLOS models the first path arriving late, never early: for $`\mu = 0`$ it adds a mean of $`\sigma\sqrt{2/\pi} \approx 0.8\sigma`$ on top of the deterministic $`\beta`$.
 
-**An alternative: Pfeiffer et al.'s model.** For the Loco TWR flights used by `lps_twr_identification`, Pfeiffer et al. [Pfeiffer et al.] model the range error $`e`$ as a mixture, without distance dependence or anchor offsets:
+**An alternative: Pfeiffer et al.'s model.** For the Loco TWR flights used by `lps_twr`, Pfeiffer et al. [Pfeiffer et al.] model the range error $`e`$ as a mixture, without distance dependence or anchor offsets:
 
 ```math
 e \sim \frac{1}{1+s}\,\mathcal{N}(\mu_g, \sigma_g^2) + \frac{s}{1+s}\,\Gamma(k, \lambda)
@@ -163,11 +163,11 @@ d_{ij} = \lVert \mathbf{p}_t - \mathbf{a}_j \rVert - \lVert \mathbf{p}_t - \math
 - **Errors are correlated across pairs**, as on real TDOA hardware: $`\mathrm{Cov}(\tilde d_{ij}, \tilde d_{ik}) = \mathrm{Var}(e_i)`$, a correlation of 0.5 when all legs have equal $`\sigma`$.
 - **NLOS errors keep their sign.** NLOS on anchor $`j`$'s leg pushes $`\tilde d_{ij}`$ up; NLOS on the reference leg pulls *every* $`\tilde d_{ij}`$ of that tag down.
 - $`\mu`$ and the tag's own antenna delay cancel in the difference, which is why the persistent bias is per anchor ($`b_j - b_i`$), not per pair.
-- For LOS legs, $`\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2`$, which is why `util_identification` derives its per-link $`\sigma`$ as the measured TDOA spread divided by $`\sqrt{2}`$. Both modes share the same per-link model, so switching modes needs no recalibration.
+- For LOS legs, $`\mathrm{Var}(\tilde d_{ij}) = \sigma_i^2 + \sigma_j^2`$, which is why `lps_tdoa` derives its per-link $`\sigma`$ as the measured TDOA spread divided by $`\sqrt{2}`$. Both modes share the same per-link model, but its values can differ between modes on the same hardware: on one Loco Positioning installation, TDOA legs were noisier than TWR ranges (see [TDoA flights: another installation](#tdoa-flights-another-installation)), so each mode has its own preset.
 
 ## Calibration
 
-### Eliko preset (`eliko_identification`)
+### Eliko TWR preset (`eliko_twr`)
 
 The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bias, robots < 10 m apart) and completed with the datasheet's 75 m maximum range and ~50 cm noise near it (see the Robot Meets Ranging workshop paper, Section II-B and Table II). With $`n = 2`$, 15 m and 75 m are 23.5 dB and 37.5 dB, so the defaults reproduce those points exactly, and the link budget sets the shape in between:
 
@@ -176,9 +176,9 @@ The Eliko preset was measured in LOS at short range (σ ≈ 12 cm, near-zero bia
 | $`\sigma`$ (cm) | 12.0 | 12.0 | 12.0 | 22.2 | 31.8 | 41.0 | 47.0 | -- |
 | $`p`$ | 0.020 | 0.020 | 0.020 | 0.037 | 0.201 | 0.641 | 0.908 | 1 |
 
-$`L_c`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04, before the scaling by $`s(L_{\max})`$). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `util_identification`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
+$`L_c`$ and $`w`$ are a least-squares fit over 10-70 m to the published calibration's dropout, which rises from 2% at 10 m to 90% at 70 m (rms error 0.04, before the scaling by $`s(L_{\max})`$). The dataset doesn't cover NLOS. In the absence of an Eliko NLOS calibration, the preset uses the same obstacle and material parameters as `lps_tdoa`. Its other parameters stay Eliko's, including no received-power bias and a 12 cm noise floor, so an obstacle's effect differs from UTIL's even with identical material values. Treat Eliko NLOS results as uncalibrated.
 
-### UTIL preset (`util_identification`)
+### Loco Positioning TDOA preset (`lps_tdoa`)
 
 Calibrated and validated against the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset [Zhao et al.]: static identification recordings first, then flights through the full pipeline (PX4 SITL, Gazebo, ROS 2, offboard control).
 
@@ -265,7 +265,7 @@ Flights reproduce UTIL's paths, not its timing: the UAV covered 89-100 % of each
 - **A direction-dependent bias hides the received-power bias.** Distance alone gives a slope of 0.04 cm/dB real against 0.98 simulated. Each anchor has a repeatable bias that depends on the direction to the tag, and removing it raises the real slope to 0.61 cm/dB (green in Figure 4; each flight is corrected with a fit on the others, and individual flights range from 0.22 to 0.90). So the received-power bias is still there, including on blocked legs, as the simulation assumes. The same bias is present in the LOS flights, but there it mostly averages out over several anchor installations, while these flights come from a single one.
 - **Overall noise is about twice the simulation's**, even on unblocked links. It isn't caused by the materials: most of it comes from the ceiling anchors of this installation, and two other installations match the simulation. The excess varies with position, so static tests, where the tag doesn't move, see it as a constant offset rather than spread.
 
-### Loco Positioning TWR preset (`lps_twr_identification`)
+### Loco Positioning TWR preset (`lps_twr`)
 
 Calibrated from the TWR flights of Pfeiffer et al.'s dataset [Pfeiffer et al.]: a Crazyflie 2.1 with Bitcraze's Loco Positioning System, the same DW1000 radio as UTIL, ranging to 8 anchors in line of sight, with OptiTrack ground truth. Of the 12 flights (6 trajectories, flown twice), one per trajectory was used for fitting and the other six only for validation. The OptiTrack poses lag the ranges by 215 ms, consistently in every flight, so they were shifted before comparing.
 
@@ -277,7 +277,7 @@ Calibrated from the TWR flights of Pfeiffer et al.'s dataset [Pfeiffer et al.]: 
 | `moving_outlier_min_speed_mps` | 0.002 | Outliers also occur while hovering (see below) |
 | `power_bias_cm_per_db`, `power_bias_ref_loss_db` | 0.99, 16.6 | Same fit; $`L_P`$ is the flights' mean loss (6.8 m) |
 | `apply_pair_bias`, `bias_min_cm`, `bias_max_cm` | `true`, -34.4, -10.5 | Uniform with the 8 anchors' offset mean and spread |
-| Long-range shape, dropout floor, obstacles, materials | as `util_identification` | Not covered by these flights |
+| Long-range shape, dropout floor, obstacles, materials | as `lps_tdoa` | Not covered by these flights |
 
 - **TWR reads short.** The anchors' offsets are -22.5 cm on average (from -9.7 to -29.2 cm) and repeat between flights: fitted separately on the training and held-out flights, they correlate at 0.99. TDOA cancels a common offset, which is why UTIL needed none.
 - **The received-power bias matches UTIL's.** 0.99 cm/dB here, 0.98 cm/dB on UTIL, fitted independently on the same radio.
@@ -303,13 +303,54 @@ Pfeiffer et al.'s mixture model (see [TWR measurement](#twr-measurement)) agains
 | Theirs, as published | 35.39 | 4.12 | 5.29 | 12.0 | 9.4 % |
 | Theirs, refitted on the training flights | 2.42 | 1.21 | 2.38 | 12.6 | 5.2 % |
 | Ours without anchor offsets or power bias | 2.35 | 1.11 | 2.45 | 12.9 | 4.9 % |
-| Ours (`lps_twr_identification`) | 3.33 | 1.30 | 1.40 | 10.7 | 4.4 % |
+| Ours (`lps_twr`) | 3.33 | 1.30 | 1.40 | 10.7 | 4.4 % |
 
 These use the model equations directly and score each seed separately, so the last row doesn't match the replay numbers above.
 
 - **As published, it doesn't fit these flights:** its Gaussian is centred at +10 cm while the ranges read 19.5 cm short, and its tail is twice as frequent.
 - **Refitted, it's equivalent to ours without anchor offsets.** A Gamma-shaped error drawn instead of the Gaussian performs like our exponential excess added to it, so their form adds nothing.
 - **The anchor offsets are the real difference.** Without them, both models fold the offsets into a wider noise, which matches the pooled error slightly better (raw 2.4 against 3.3 cm) because a random offset can't land on a specific anchor's real one. But the offsets are fixed per anchor, not noise: with them, the noise around each anchor's median matches (1.40 against 2.4 cm). A fixed bias doesn't average out over time, so for an estimator this is the behaviour that matters.
+
+#### TDoA flights: another installation
+
+The dataset also has 9 complete TDoA flights in the same arena, with all 28 anchor pairs. They test `lps_tdoa`, the Loco Positioning TDoA preset calibrated on UTIL's installations, on another installation of the same system and mode. Four flights were used for fitting and the other five for validation. The OptiTrack poses lag the measurements by 250 ms (200-275 ms across flights). Two data defects were excluded: pair 1-6 reads a constant 2.3 m short in every flight, which no per-anchor bias can produce, and 1.25 % of values are off by more than 3 m (up to 125 m), more than the anchors' separation allows.
+
+On the held-out flights (all pairs; W1 in cm, *centred* removes each pair's median):
+
+| Model | W1 raw | W1 centred | Robust std | Beyond +30 cm | Beyond -30 cm |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Real flights | -- | -- | 21.3 | 9.5 % | 12.6 % |
+| `lps_tdoa` | 16.87 | 14.39 | 6.5 | 1.1 % | 1.1 % |
+| `lps_twr`, in TDOA mode | 9.75 | 6.38 | 16.0 | 5.4 % | 5.5 % |
+| Same, plus a TDOA-only Gaussian (16.9 cm) | 8.32 | 2.92 | 24.2 | 11.2 % | 11.3 % |
+| Pfeiffer et al.'s TDoA model | 119.51 | 120.45 | 35.3 | 20.4 % | 20.5 % |
+| Refitted on these flights (values below) | 7.84 | 1.56 | 21.4 | 11.2 % | 11.2 % |
+
+- **This installation is about three times noisier than `lps_tdoa` predicts.** The noise comes from specific anchors, the same low anchors (1-3) as in TWR, so it's a property of the installation rather than of the system or mode, as with UTIL's own noisier installation (see [Flight data](#flight-data)). The preset keeps UTIL's values, which cover static and flight data, LOS and NLOS, and several installations.
+- **A mode's values can't be taken from the other mode.** On this installation, the TWR calibration is 25 % too narrow in TDOA mode: TDOA legs have more outliers (45 % against 35 %) with a larger excess (22.7 against 14.7 cm). Adding one TDOA-only Gaussian widens the core too much and still misses the tails, while refitting the legs fits without a new parameter.
+- **Per-anchor offsets explain the pair offsets.** The 27 pairs' medians spread by 10.9 cm, and the 8 per-anchor offsets leave 2.4 cm of it.
+- **Pfeiffer et al.'s TDoA model** (an equal mix of a Gaussian and a Cauchy distribution, both of scale 30 cm, added to each difference) has far too heavy tails for these flights.
+
+**To simulate a noisier installation**, start from `lps_tdoa` and set the values refitted here:
+
+| Parameter | Value |
+| --- | --- |
+| `min_noise_stddev_cm` | 8.9 |
+| `moving_outlier_probability`, `moving_outlier_mean_cm` | 0.45, 22.7 |
+| `moving_outlier_min_speed_mps` | 0.002 |
+| `power_bias_cm_per_db` | 1.27 |
+| `bias_min_cm`, `bias_max_cm` | -14.0, 14.0 |
+| `update_rate_hz` | 5 (measured: 4.8 values per second per pair) |
+
+Replayed through the plugin (5 seeds per flight), they reproduce the held-out flights (Figure 6). The plugin forms its 7 pairs against the reference anchor; every simulated anchor is alike, so these stand for the installation's average pair and are compared with all 27 real pairs. W1 is 1.59 cm centred, against 14.41 cm for `lps_tdoa`.
+
+![Loco Positioning TDOA flights: noise shape and received-power bias](images/lps_tdoa_flights.png)
+
+*Figure 6: Held-out Loco TDOA flights replayed through the plugin with the refitted values, panels as in Figure 3. The slopes are fitted on samples within 30 cm of the pair's median, which flattens them when the noise is this wide: the fitted 1.27 cm/dB shows as 0.72.*
+
+- **The noise shape matches**, tails included (robust std 21.6 against 21.3 cm).
+- **The received-power bias holds:** 0.75 cm/dB real against 0.72 simulated, with the same trimming.
+- **Real pairs differ more:** pairs with anchor 0 have a robust std of 16.9 cm, pairs with the low anchors 1-3 up to 38 cm. As in TWR, this depends on the installation and isn't modelled.
 
 ## Sim-to-real gap
 
@@ -323,19 +364,21 @@ What to keep in mind when moving from the simulator to real hardware. The number
 **Installation-specific effects**
 - Each anchor has a repeatable bias that depends on the direction to the tag. It isn't a fixed property of the hardware: it changes when an anchor is reinstalled or obstacles are added, so it seems to depend on each anchor's mounting and surroundings (UTIL reports pose-related biases for this chip). It isn't modelled, and needs further work.
 - Real per-anchor offsets are about twice the simulated ones in UTIL's flights, and some installations, or a few of their anchors, are much noisier. In the Loco TWR flights, per-anchor noise ranges from 7.3 to 18 cm and outliers from 0 to 11 %, repeatably between flights. This depends on the installation, so it isn't modelled: drawing each link's noise at random made the fit worse, since a random draw can't know which anchors are the noisy ones. Static tests can't reveal either effect.
+- The installation matters as much as the system: two installations of the same Loco Positioning TDoA system differed about threefold in noise (see [TDoA flights: another installation](#tdoa-flights-another-installation)). The presets describe the installations they were calibrated on.
 
 **Statistical approximations**
 - Simulated noise is independent from sample to sample. Real errors are correlated over about a metre of travel.
 - Moving outliers are uniform, uncorrelated and the same for every anchor. Real rates vary by anchor, and some obstacles (plastic, cabinet) cause occasional large misses.
 - Real obstacle effects vary more with placement than simulated ones.
 - Each run draws its own anchor offsets, so one run can move results by about 4 cm. Average over seeds.
+- Real logs contain occasional corrupted values, errors of metres to over 100 m (0.7 % in UTIL, 1.25 % in the Loco TDoA flights), and the Loco TDoA flights a pair with a constant 2.3 m defect. The simulator produces neither, so estimators should reject such values themselves.
 
 **What the current data misses**
 - UTIL covers 0.5-6.5 m. Beyond that, noise, dropout and the linear received-power bias are extrapolated.
 - Eliko was measured in LOS below 10 m. Its curves up to 75 m follow the datasheet, its dropout shape isn't validated by measured dropouts, and its NLOS behaviour uses UTIL's obstacle values.
 - The plastic, cardboard and foam properties and the metal detour loss are assumptions, tested only on UTIL's objects. UTIL didn't survey its flight obstacles, so their simulated positions are approximate.
-- The Loco TWR flights cover 3.4-10 m in LOS. Their long-range shape and obstacle behaviour are UTIL's, not validated in TWR.
-- `lps_twr_identification` reproduces flight. On the ground the real noise is about 3 cm with almost no outliers, while the preset gives 8.3 cm, since the noise doesn't depend on flying.
+- The Loco flights cover 3.4-10 m in LOS. Their long-range shape and obstacle behaviour are UTIL's, not validated on them.
+- `lps_twr` reproduces flight. On the ground the real noise is about 3 cm with almost no outliers, while the preset gives 8.3 cm, since the noise doesn't depend on flying.
 - All presets are for DW1000-based hardware (Loco, Eliko). Other radios need their own calibration.
 
 **In practice:** test estimators with more noise and outliers than the simulation produces, and recalibrate the preset with a LOS distance test and a short flight at the target site.
@@ -397,7 +440,7 @@ Attenuation rates $`\alpha`$ (dB/m) at DW1000 channels 2 and 5, and relative per
 | `foam` | 1.05 | 0.2 | 0.3 | $`\tan\delta = 0.0005`$ |
 | `metal` | -- | -- | -- | detour: 20 dB loss |
 
-The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss aren't from a standard: they're assumptions, tested on UTIL's NLOS objects and flights. Some resulting links with `eliko_identification`'s noise and dropout curves, with `enable_nlos_dropout: true` to show the full budget (no deterministic bias, since that preset has no power bias and the delay and detour bias are off):
+The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss aren't from a standard: they're assumptions, tested on UTIL's NLOS objects and flights. Some resulting links with `eliko_twr`'s noise and dropout curves, with `enable_nlos_dropout: true` to show the full budget (no deterministic bias, since that preset has no power bias and the delay and detour bias are off):
 
 | Link | $`L_{\text{obs}}`$ (dB) | $`L`$ (dB) | Regime | $`\sigma`$ (cm) | $`p`$ |
 | --- | ---: | ---: | --- | ---: | ---: |
@@ -413,7 +456,7 @@ The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss ar
 | concrete 0.2 m, 5 m | 19.5 | 33.5 | Hard NLOS | 33.3 | 0.255 |
 | metal, 5 m | 20.0 | 34.0 | Hard NLOS | 34.9 | 0.330 |
 
-The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `util_identification`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
+The same wall matters more the farther apart the robots are, since it eats into a budget distance has already spent (compare the two 0.25 m rows). With `enable_nlos_dropout: false`, as in `lps_tdoa`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout. Where $`L \ge L_{\max}`$ from obstacles, $`\sigma`$ stays at $`\sigma_{\max}`$.
 
 ## References
 
