@@ -1,4 +1,5 @@
-# UWBGazeboSystem plugin parameters -- calibrated from the UTIL dataset
+# UWBGazeboSystem plugin parameters -- "lps_tdoa" preset: Bitcraze Loco
+# Positioning System in TDOA mode, calibrated from the UTIL dataset
 # (Zhao et al., "UTIL: An Ultra-Wideband Time-Difference-of-Arrival Indoor
 # Localization Dataset", IJRR 2023 -- https://utiasdsl.github.io/util-uwb-dataset/),
 # specifically its identification-dataset (Decawave DWM1000, Bitcraze LPS).
@@ -14,7 +15,7 @@
 # TDOA spread lands back on UTIL's measured one. Treat this preset as "in
 # the right ballpark for real DW1000 hardware", not an exact calibration.
 #
-# What's real-data-derived vs. carried over from eliko_identification is
+# What's real-data-derived vs. carried over from eliko_twr is
 # called out below.
 
 # Ranging mode: TDOA, matching UTIL's own infrastructure (Bitcraze LPS).
@@ -28,7 +29,7 @@ update_rate_hz: 10.0
 
 # Link budget and its long-range shape: UTIL's identification dataset only
 # covers 0.5-6.5 m (L < 17 dB), well short of where noise growth or dropout
-# start -- carried over from eliko_identification; not contradicted, just
+# start -- carried over from eliko_twr; not contradicted, just
 # not validated here.
 path_loss_exponent: 2.0
 max_link_loss_db: 37.5

@@ -132,6 +132,9 @@ private:
   // exponential excess of this mean. 0 disables it.
   double movingOutlierProbability_{0.0};
   double movingOutlierMeanCm_{30.0};
+  // Slowest speed of either end that counts as moving (10 cm/s = 1 cm per
+  // update at 10 Hz). 0 counts any displacement at all.
+  double movingOutlierMinSpeedMps_{0.1};
   // Ignore intersections too close to endpoints to avoid self-hit artifacts.
   double nlosEndpointMarginM_{0.02};
   // Obstacle loss at or above which a link is NLOS (noise folded positive).

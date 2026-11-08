@@ -4,7 +4,7 @@
 
 Paste the output into a world file to use a preset without the full simulator:
 
-  python3 tools/preset_to_sdf.py eliko_identification
+  python3 tools/preset_to_sdf.py eliko_twr
 
 A preset is a name under uwb_gazebo_plugin/presets/, or a path to a YAML file.
 """

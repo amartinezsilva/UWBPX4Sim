@@ -13,7 +13,7 @@ How to run without Docker, and reference for the layout file, the manual install
 - `setup_simulator.sh`: guided setup script (models, plugin, plugin parameters, optional world, optional PX4 rebuild, ROS 2 workspace checks)
 - `simulator_launcher.sh`: tmux-based PX4 SITL launcher
 - `uwb_gazebo_plugin/`: custom Gazebo system plugin source
-- `uwb_gazebo_plugin/presets/`: named plugin-parameter presets (e.g. `eliko_identification`, `util_identification`); `setup_simulator.sh` applies the one you pick
+- `uwb_gazebo_plugin/presets/`: named plugin-parameter presets (e.g. `eliko_twr`, `lps_tdoa`); `setup_simulator.sh` applies the one you pick
 - `worlds/`: Gazebo worlds
 - `tools/`: helper scripts for sensor layout and mesh generation
 
@@ -54,7 +54,7 @@ Common options:
 
 ```bash
 ./setup_simulator.sh --layout config/demo_nlos.yaml                        # use a specific layout, skip the picker
-./setup_simulator.sh --params util_identification                          # use a specific plugin-parameter preset, skip the picker
+./setup_simulator.sh --params lps_tdoa                                     # use a specific plugin-parameter preset, skip the picker
 ./setup_simulator.sh --px4-dir /path/to/PX4-Autopilot --ros-ws /path/to/ros_ws   # non-default locations
 ./setup_simulator.sh -y                                                     # non-interactive, safe defaults (skips optional world/rebuild unless also given --build/--world)
 ./setup_simulator.sh -n                                                     # dry run: print what would happen, change nothing

@@ -133,12 +133,12 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
     # are all equal named files under config_dir. Preferred when no ?preset
     # is given and nothing else has been picked yet -- mirrors
     # setup_simulator.sh's own -y fallback (see select_params_preset there).
-    DEFAULT_PRESET_NAME = "eliko_identification"
+    DEFAULT_PRESET_NAME = "eliko_twr"
     # Hand-written, calibration-annotated presets shipped with the repo.
     # Read-only from the GUI: saving re-renders a preset from PARAM_GROUPS,
     # which would drop their explanatory comments -- tune one, then save it
     # under a new name instead.
-    BUILTIN_PRESETS = frozenset({"eliko_identification", "util_identification"})
+    BUILTIN_PRESETS = frozenset({"eliko_twr", "lps_tdoa", "lps_twr"})
 
     # (group label, [(key, default)]) -- defines both the canonical write
     # order/section comments for a rendered preset file and the ordered
@@ -188,6 +188,7 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
             ("gaussian_noise_mean_cm", 0.0),
             ("moving_outlier_probability", 0.0),
             ("moving_outlier_mean_cm", 30.0),
+            ("moving_outlier_min_speed_mps", 0.1),
             ("apply_pair_bias", False),
             ("bias_min_cm", -27.0),
             ("bias_max_cm", 20.0),

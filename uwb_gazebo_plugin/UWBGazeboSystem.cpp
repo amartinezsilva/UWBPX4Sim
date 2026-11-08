@@ -224,9 +224,6 @@ constexpr double kPositiveEpsilon = 1e-6;
     double noiseStddevCm{0.0};
   };
 
-  // Slowest speed that counts as moving (1 cm per update at 10 Hz).
-  constexpr double kMovingMinSpeedMps = 0.1;
-
   // Allowed measurement rates. 75 Hz is the highest tag rate Eliko offers;
   // Bitcraze's LPS is slower. See docs/measurement_model.md.
   constexpr double kMinUpdateRateHz = 1.0;
@@ -349,6 +346,7 @@ void UWBGazeboSystem::ValidateAndNormalizeParameters()
   clampNonNegative(this->metalDetourLossDb_, "material_metal_detour_loss_db");
   clampNonNegative(this->movingOutlierProbability_, "moving_outlier_probability");
   clampNonNegative(this->movingOutlierMeanCm_, "moving_outlier_mean_cm");
+  clampNonNegative(this->movingOutlierMinSpeedMps_, "moving_outlier_min_speed_mps");
   this->movingOutlierProbability_ = std::min(this->movingOutlierProbability_, 1.0);
 
   if (this->noiseEndLossDb_ < this->noiseStartLossDb_)
@@ -458,6 +456,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   readBool("enable_nlos_dropout", this->enableNlosDropout_);
   readDouble("moving_outlier_probability", this->movingOutlierProbability_);
   readDouble("moving_outlier_mean_cm", this->movingOutlierMeanCm_);
+  readDouble("moving_outlier_min_speed_mps", this->movingOutlierMinSpeedMps_);
   readDouble("nlos_endpoint_margin_m", this->nlosEndpointMarginM_);
   readDouble("nlos_min_loss_db", this->nlosMinLossDb_);
   readDouble("body_shadow_max_loss_db", this->bodyShadowMaxLossDb_);
@@ -559,6 +558,9 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         << ", enable_nlos_dropout=" << std::boolalpha << this->enableNlosDropout_
         << ", nlos_min_loss_db=" << this->nlosMinLossDb_
         << ", body_shadow_max_loss_db=" << this->bodyShadowMaxLossDb_
+        << ", moving_outlier=[p=" << this->movingOutlierProbability_
+        << ", mean_cm=" << this->movingOutlierMeanCm_
+        << ", min_speed_mps=" << this->movingOutlierMinSpeedMps_ << "]"
         << ", power_bias_cm_per_db=" << this->powerBiasCmPerDb_
         << ", power_bias_ref_loss_db=" << this->powerBiasRefLossDb_
         << ", nlos_endpoint_margin_m=" << this->nlosEndpointMarginM_
@@ -1018,7 +1020,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			const gz::math::Vector3d sensorPos = computeWorldPose(sensorEntity, ecm).Pos();
 			const auto last = this->lastSensorPosition_.find(sensorEntity);
 			sensorMoving[sensorEntity] = last != this->lastSensorPosition_.end() &&
-			                             sensorPos.Distance(last->second) > kMovingMinSpeedMps / this->updateRateHz_;
+			                             sensorPos.Distance(last->second) > this->movingOutlierMinSpeedMps_ / this->updateRateHz_;
 			this->lastSensorPosition_[sensorEntity] = sensorPos;
 		}
 	}
