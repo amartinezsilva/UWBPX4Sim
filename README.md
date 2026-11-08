@@ -15,7 +15,7 @@ A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot
 - **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance and by the obstacles in the way, including their material. See [Measurement model](docs/measurement_model.md).
 - **Calibrated presets**: `eliko_identification` (Eliko, TWR) and `util_identification` (UTIL dataset, TDOA). Tune one and save your own from the setup GUI.
 - **Multi-robot layouts** from one YAML file: UAVs and UGVs carrying any mix of tags and anchors, plus anchors fixed in the world. Vehicle models and the ROS 2 bridge are generated from it.
-- **Guided setup** with a browser GUI, and a one-command **launcher**.
+- **Guided setup** with a browser GUI, a one-command **launcher**, and **RViz** showing the robots, transceivers and live UWB links for any layout.
 - **ROS 2 offboard nodes** that fly the UAVs and drive the UGVs along CSV trajectories.
 
 ## Getting started

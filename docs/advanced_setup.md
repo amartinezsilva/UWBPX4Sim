@@ -103,11 +103,13 @@ Then launch the simulation:
 ./simulator_launcher.sh
 ```
 
+RViz opens in its own tmux window with every robot, its tags (red) and anchors (blue), a line from each tag to each anchor that stays bright while measurements arrive and fades while they drop out, and each robot's path. It's built from the layout, so it works for any experiment: `ROS2/px4_sim_offboard/scripts/uwb_viz.py` publishes everything on `/uwb_viz/markers`, and `ROS2/px4_sim_offboard/rviz/uwbpx4sim.rviz` displays it.
+
 No ground station is needed: the offboard nodes arm and fly the vehicles, and the launcher turns off PX4's ground-station check on every instance for the run. You can still connect QGroundControl yourself to monitor them.
 
 | Option | Effect |
 | --- | --- |
-| `--headless` | Run Gazebo without its GUI |
+| `--headless` | Run Gazebo without its GUI, and don't open RViz |
 | `--detach` | Don't attach to the tmux session; stop it with `tmux kill-session -t <session>` |
 
 ## Layout files

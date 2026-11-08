@@ -795,7 +795,26 @@ else
     fi
 
     if [[ -d "$ROS_WS/install/px4_sim_offboard" ]]; then
-      log_ok "px4_sim_offboard already built in $ROS_WS/install"
+      # Always recompile from the current source: a rebuilt Docker image
+      # compiles its own checkout, and the mounted source can be older by
+      # file date, so an incremental build would keep stale binaries.
+      # Where install/ links into build/ (--symlink-install, as in the
+      # image), rebuilding build/ is enough and leaves install/ untouched.
+      node_bin="$ROS_WS/install/px4_sim_offboard/lib/px4_sim_offboard/uav_offboard_control"
+      if (( DRY_RUN )); then
+        log_info "[DRY-RUN] would recompile px4_sim_offboard from the current source"
+      elif [[ -L "$node_bin" && -d "$ROS_WS/build/px4_sim_offboard" ]]; then
+        log_info "Recompiling px4_sim_offboard from the current source..."
+        cmake --build "$ROS_WS/build/px4_sim_offboard" --clean-first -j >/dev/null \
+          && log_ok "px4_sim_offboard recompiled" \
+          || log_warn "Recompiling px4_sim_offboard failed; run: cmake --build $ROS_WS/build/px4_sim_offboard --clean-first"
+      else
+        require_command colcon
+        log_info "Rebuilding px4_sim_offboard from the current source..."
+        ( cd "$ROS_WS" && colcon build --packages-select px4_sim_offboard --cmake-clean-first ) \
+          && log_ok "px4_sim_offboard rebuilt" \
+          || log_warn "Rebuilding px4_sim_offboard failed; run: cd $ROS_WS && colcon build --packages-select px4_sim_offboard"
+      fi
     else
       if confirm "Build px4_sim_offboard now with colcon?" y; then
         if (( DRY_RUN )); then

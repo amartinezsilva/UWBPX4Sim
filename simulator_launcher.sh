@@ -90,7 +90,8 @@ Options:
   (env) UWB_LAYOUT_FILE  Layout YAML with per-robot spawn_pose and sensor placement (default: config/demo_nlos.yaml)
   (env) GZ_WORLD  Gazebo world name from PX4 Tools/simulation/gz/worlds (default: the
                        layout's own 'world:' field if it names one installed there, else "default")
-  --headless           Run Gazebo without its GUI (sets HEADLESS=1 for PX4's gz launcher).
+  --headless           Run Gazebo without its GUI (sets HEADLESS=1 for PX4's gz launcher), and
+                       don't open RViz.
   --detach             Don't attach to the tmux session, and leave the simulation running when
                        this script exits; stop it with 'tmux kill-session -t \$SESSION'. For
                        unattended runs.
@@ -321,6 +322,11 @@ create_window_with_panes "$SESSION:2" 3
 
 tmux send-keys -t "$SESSION:2.0" "$(build_ros_shell_command "sleep 12 && cd \"$ROS_WS\" && PX4_SIM_OFFBOARD_BRIDGE_CONFIG=\"$UWB_BRIDGE_CONFIG\" ros2 launch px4_sim_offboard uwb_bridge_launch.py")" C-m
 tmux send-keys -t "$SESSION:2.1" "$(build_ros_shell_command "sleep 25 && cd \"$ROS_WS\" && UWB_LAYOUT_FILE=\"$UWB_LAYOUT_FILE\" ros2 launch px4_sim_offboard offboard_launch.py")" C-m
+if (( ! HEADLESS_GZ )); then
+  tmux new-window -t "$SESSION:3" -n rviz
+  tmux send-keys -t "$SESSION:3" "$(build_ros_shell_command "sleep 25 && rviz2 -d \"$SCRIPT_DIR/ROS2/px4_sim_offboard/rviz/uwbpx4sim.rviz\" --ros-args -p use_sim_time:=true")" C-m
+fi
+
 spawned_models_str="${SPAWNED_MODELS[*]}"
 tmux send-keys -t "$SESSION:2.2" "echo '[INFO] UWB launcher.' && echo '[INFO] Layout file: $UWB_LAYOUT_FILE' && echo '[INFO] Spawned models: $spawned_models_str' && echo '[INFO] Bridge topics should appear under /uwb_gz_simulator/distances/aItJ and /uwb_gz_simulator/distances_ground_truth/aItJ.' && echo '[INFO] Offboard nodes are configured directly from the layout YAML.'" C-m
 if [[ -n "$STATIC_ANCHORS_MODEL" ]]; then
