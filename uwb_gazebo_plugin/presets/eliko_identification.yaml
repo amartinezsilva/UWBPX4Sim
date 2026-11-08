@@ -24,6 +24,8 @@ topic: /uwb_gz_simulator/distances
 ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measurement rate, 1-75 Hz. The calibration used 10 Hz.
+update_rate_hz: 10.0
 
 # Link budget: free-space path loss (n = 2) relative to 1 m. 37.5 dB is
 # 75 m, the datasheet's maximum range.

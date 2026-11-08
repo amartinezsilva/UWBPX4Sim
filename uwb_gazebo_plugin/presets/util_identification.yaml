@@ -23,6 +23,8 @@ topic: /uwb_gz_simulator/distances
 ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
 tdoa_topic: /uwb_gz_simulator/tdoa
 tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measurement rate, 1-75 Hz. The calibration used 10 Hz.
+update_rate_hz: 10.0
 
 # Link budget and its long-range shape: UTIL's identification dataset only
 # covers 0.5-6.5 m (L < 17 dB), well short of where noise growth or dropout

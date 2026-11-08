@@ -154,6 +154,7 @@ def create_app(uwb_root: Path, selection_file: Path) -> Flask:
             ("ground_truth_topic", "/uwb_gz_simulator/distances_ground_truth"),
             ("tdoa_topic", "/uwb_gz_simulator/tdoa"),
             ("tdoa_ground_truth_topic", "/uwb_gz_simulator/tdoa_ground_truth"),
+            ("update_rate_hz", 10.0),
         ]),
         ("Link budget (dB; with n = 2, 23.5 dB = 15 m and 37.5 dB = 75 m).", [
             ("path_loss_exponent", 2.0),

@@ -224,8 +224,13 @@ constexpr double kPositiveEpsilon = 1e-6;
     double noiseStddevCm{0.0};
   };
 
-  // Smallest step between updates that counts as moving.
-  constexpr double kMovingMinStepM = 0.01;
+  // Slowest speed that counts as moving (1 cm per update at 10 Hz).
+  constexpr double kMovingMinSpeedMps = 0.1;
+
+  // Allowed measurement rates. 75 Hz is the highest tag rate Eliko offers;
+  // Bitcraze's LPS is slower. See docs/measurement_model.md.
+  constexpr double kMinUpdateRateHz = 1.0;
+  constexpr double kMaxUpdateRateHz = 75.0;
 }  // namespace
 
 double UWBGazeboSystem::PathLossDb(const double _distanceM) const
@@ -298,6 +303,17 @@ double UWBGazeboSystem::ComputeDropoutProbability(const double _lossDb) const
 
 void UWBGazeboSystem::ValidateAndNormalizeParameters()
 {
+  if (!(this->updateRateHz_ >= kMinUpdateRateHz && this->updateRateHz_ <= kMaxUpdateRateHz))
+  {
+    const double clamped = std::isfinite(this->updateRateHz_)
+        ? std::clamp(this->updateRateHz_, kMinUpdateRateHz, kMaxUpdateRateHz) : 10.0;
+    gzwarn << "[UWBGazeboSystem] update_rate_hz=" << this->updateRateHz_ << " is outside ["
+           << kMinUpdateRateHz << ", " << kMaxUpdateRateHz << "] Hz. Using " << clamped << ".\n";
+    this->updateRateHz_ = clamped;
+  }
+  this->updatePeriod_ = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+      std::chrono::duration<double>(1.0 / this->updateRateHz_));
+
   if (this->biasMinCm_ > this->biasMaxCm_)
   {
     gzwarn << "[UWBGazeboSystem] bias_min_cm > bias_max_cm. Swapping values.\n";
@@ -428,6 +444,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   if (this->randomSeed_ != 0)
     this->rng_.seed(this->randomSeed_);
 
+  readDouble("update_rate_hz", this->updateRateHz_);
   readDouble("path_loss_exponent", this->pathLossExponent_);
   readDouble("max_link_loss_db", this->maxLinkLossDb_);
   readDouble("noise_start_loss_db", this->noiseStartLossDb_);
@@ -531,6 +548,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
     }
   }
 
+  gzmsg << "[UWBGazeboSystem] update_rate_hz=" << this->updateRateHz_ << "\n";
   gzmsg << "[UWBGazeboSystem] Link-budget model: path_loss_exponent=" << this->pathLossExponent_
         << ", max_link_loss_db=" << this->maxLinkLossDb_
         << ", noise_loss_range_db=[" << this->noiseStartLossDb_ << ", " << this->noiseEndLossDb_ << "]"
@@ -793,12 +811,14 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
                                 gz::sim::EntityComponentManager &ecm)
 {
 
+	// Updates are scheduled on a fixed grid of updatePeriod_, so the rate
+	// stays exact when the period isn't a multiple of the physics step. If
+	// the simulation falls behind by a whole period, it restarts from now.
 	const auto now = info.simTime;
-	const auto dt = now - this->lastUpdateTime_;
-
-	if (dt < std::chrono::milliseconds(100)) return;
-
-	this->lastUpdateTime_ = now;
+	if (now - this->lastUpdateTime_ < this->updatePeriod_) return;
+	this->lastUpdateTime_ += this->updatePeriod_;
+	if (now - this->lastUpdateTime_ >= this->updatePeriod_)
+		this->lastUpdateTime_ = now;
 
 	std::vector<std::pair<std::string, gz::sim::Entity>> tags;
 	std::vector<std::pair<std::string, gz::sim::Entity>> anchors;
@@ -998,7 +1018,7 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			const gz::math::Vector3d sensorPos = computeWorldPose(sensorEntity, ecm).Pos();
 			const auto last = this->lastSensorPosition_.find(sensorEntity);
 			sensorMoving[sensorEntity] = last != this->lastSensorPosition_.end() &&
-			                             sensorPos.Distance(last->second) > kMovingMinStepM;
+			                             sensorPos.Distance(last->second) > kMovingMinSpeedMps / this->updateRateHz_;
 			this->lastSensorPosition_[sensorEntity] = sensorPos;
 		}
 	}

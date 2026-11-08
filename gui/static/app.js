@@ -28,6 +28,7 @@ const PARAM_UI = {
   uwb_mode: { type: "select", options: ["twr", "tdoa"] },
   tdoa_topic: { type: "text" },
   tdoa_ground_truth_topic: { type: "text" },
+  update_rate_hz: { type: "slider", min: 1, max: 75, step: 1 },
   path_loss_exponent: { type: "slider", min: 1, max: 4, step: 0.05 },
   max_link_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
   min_noise_stddev_cm: { type: "slider", min: 0, max: 200, step: 1 },

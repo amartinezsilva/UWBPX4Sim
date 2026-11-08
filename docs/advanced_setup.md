@@ -343,6 +343,7 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <ground_truth_topic>/uwb_gz_simulator/distances_ground_truth</ground_truth_topic>
   <tdoa_topic>/uwb_gz_simulator/tdoa</tdoa_topic>
   <tdoa_ground_truth_topic>/uwb_gz_simulator/tdoa_ground_truth</tdoa_ground_truth_topic>
+  <update_rate_hz>10.0</update_rate_hz>
 
   <path_loss_exponent>2.0</path_loss_exponent>
   <max_link_loss_db>37.5</max_link_loss_db>
