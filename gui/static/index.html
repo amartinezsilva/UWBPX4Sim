@@ -8,7 +8,7 @@
 </head>
 <body>
 <header>
-  <h1>UWBPX4Sim setup</h1>
+  <h1><img class="logo" src="logo.png" alt="UWBPX4Sim"><span class="page-name">Setup</span></h1>
   <p class="subtitle">Build a layout, tune the plugin, then continue setup_simulator.sh.</p>
 </header>
 
@@ -49,6 +49,15 @@
       </div>
     </div>
 
+    <div class="static-anchors">
+      <div class="column-header">
+        <h2>Static anchors</h2>
+        <button id="add-static-anchor">+ Add static anchor</button>
+      </div>
+      <p class="hint">Fixed in the world, not on a UGV. Positions are in world coordinates, like spawn_pose.</p>
+      <div id="static-anchor-list" class="sensor-list"></div>
+    </div>
+
     <div class="toolbar world-bar">
       <label>World
         <input id="world-input" type="text" list="world-options" placeholder="(PX4 default world)">
@@ -62,14 +71,13 @@
   <section id="tab-params" class="tab-panel">
     <div class="toolbar">
       <label>Preset
-        <select id="params-preset"><option value="">(current params.yaml)</option></select>
+        <select id="params-preset"></select>
       </label>
       <button id="params-load">Load</button>
-      <label>Save as preset
+      <label>Save as
         <input id="params-preset-name" type="text" placeholder="preset name">
       </label>
-      <button id="params-save-preset">Save preset</button>
-      <button id="params-apply">Apply to params.yaml</button>
+      <button id="params-save-preset">Save</button>
       <span id="params-status" class="status"></span>
     </div>
     <div id="params-groups"></div>
@@ -79,8 +87,29 @@
 <footer>
   <button id="continue-setup" class="primary">Continue Setup &rarr;</button>
   <span id="continue-status" class="status"></span>
-  <p class="hint">Saves the current layout and plugin parameters, then hands control back to setup_simulator.sh in your terminal.</p>
+  <label class="build-option" title="Takes several minutes">
+    <input type="checkbox" id="build-px4"> Re-compile PX4
+    <span id="build-px4-note" class="build-note"></span>
+  </label>
+  <p class="hint">Saves the layout and plugin parameters, then applies them here. Re-compile PX4 the first time in a new
+    container and after changing the plugin's C++ code; layouts, worlds and plugin parameters don't need it.</p>
 </footer>
+
+<div id="progress-overlay" class="overlay" hidden>
+  <div class="progress-card">
+    <div class="progress-head">
+      <div id="progress-spinner" class="spinner" aria-hidden="true"></div>
+      <h2 id="progress-title">Applying setup...</h2>
+    </div>
+    <p id="progress-step" class="progress-step"></p>
+    <div id="progress-bar" class="progress-bar" hidden><div id="progress-fill"></div></div>
+    <details open>
+      <summary>Log</summary>
+      <pre id="progress-log"></pre>
+    </details>
+    <p id="progress-final" class="progress-final"></p>
+  </div>
+</div>
 
 <template id="tpl-sensor-row">
   <div class="sensor-row">
@@ -88,6 +117,7 @@
     <label>x <input type="number" class="sensor-x" step="0.001"></label>
     <label>y <input type="number" class="sensor-y" step="0.001"></label>
     <label>z <input type="number" class="sensor-z" step="0.001"></label>
+    <label>bias cm <input type="number" class="sensor-bias" step="0.1" placeholder="random"></label>
     <button class="remove-sensor" title="Remove">&times;</button>
   </div>
 </template>

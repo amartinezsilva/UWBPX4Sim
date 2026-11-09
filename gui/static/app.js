@@ -25,29 +25,39 @@ const PARAM_UI = {
   apply_pair_bias: { type: "bool" },
   bias_min_cm: { type: "number", step: 0.1 },
   bias_max_cm: { type: "number", step: 0.1 },
-  enable_nlos_dropout: { type: "bool" },
-  nlos_endpoint_margin_m: { type: "slider", min: 0, max: 1, step: 0.01 },
-  los_dropout_start_distance_m: { type: "slider", min: 0, max: 100, step: 0.5 },
-  los_dropout_end_distance_m: { type: "slider", min: 0, max: 150, step: 0.5 },
-  los_hard_dropout_distance_m: { type: "slider", min: 0, max: 150, step: 0.5 },
-  los_max_thickness_m: { type: "slider", min: 0, max: 2, step: 0.01 },
-  soft_nlos_max_thickness_m: { type: "slider", min: 0, max: 2, step: 0.01 },
-  blackout_thickness_m: { type: "slider", min: 0, max: 3, step: 0.01 },
-  hard_nlos_gap_ratio: { type: "slider", min: 0, max: 2, step: 0.01 },
-  min_dropout_probability: { type: "slider", min: 0, max: 1, step: 0.01 },
-  max_dropout_probability: { type: "slider", min: 0, max: 1, step: 0.01 },
+  uwb_mode: { type: "select", options: ["twr", "tdoa"] },
+  tdoa_topic: { type: "text" },
+  tdoa_ground_truth_topic: { type: "text" },
+  update_rate_hz: { type: "slider", min: 1, max: 75, step: 1 },
+  path_loss_exponent: { type: "slider", min: 1, max: 4, step: 0.05 },
+  max_link_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
   min_noise_stddev_cm: { type: "slider", min: 0, max: 200, step: 1 },
   max_noise_stddev_cm: { type: "slider", min: 0, max: 200, step: 1 },
-  los_stddev_start_distance_m: { type: "slider", min: 0, max: 150, step: 0.5 },
-  los_stddev_end_distance_m: { type: "slider", min: 0, max: 150, step: 0.5 },
-  nlos_dropout_thickness_extra_weight: { type: "slider", min: 0, max: 2, step: 0.01 },
-  nlos_stddev_thickness_extra_weight: { type: "slider", min: 0, max: 2, step: 0.01 },
+  noise_start_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
+  noise_end_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
+  min_dropout_probability: { type: "slider", min: 0, max: 1, step: 0.01 },
+  dropout_center_loss_db: { type: "slider", min: 0, max: 80, step: 0.5 },
+  dropout_width_db: { type: "slider", min: 0.1, max: 10, step: 0.1 },
+  enable_nlos_dropout: { type: "bool" },
+  moving_outlier_probability: { type: "slider", min: 0, max: 0.5, step: 0.005 },
+  moving_outlier_mean_cm: { type: "slider", min: 0, max: 100, step: 1 },
+  moving_outlier_min_speed_mps: { type: "slider", min: 0, max: 1, step: 0.01 },
+  nlos_endpoint_margin_m: { type: "slider", min: 0, max: 1, step: 0.01 },
+  nlos_min_loss_db: { type: "slider", min: 0, max: 20, step: 0.5 },
+  body_shadow_max_loss_db: { type: "slider", min: 0, max: 40, step: 0.5 },
+  enable_material_attenuation: { type: "bool" },
+  carrier_frequency_ghz: { type: "slider", min: 3, max: 10, step: 0.1 },
+  material_metal_detour_loss_db: { type: "slider", min: 0, max: 60, step: 0.5 },
+  enable_dielectric_delay: { type: "bool" },
+  power_bias_cm_per_db: { type: "number", step: 0.05 },
+  power_bias_ref_loss_db: { type: "number", step: 0.5 },
+  random_seed: { type: "number", step: 1 },
 };
 
 let trajectoryOptions = [];
 // [{name, role}] from models/vehicles.yaml; the first one per role is the default.
 let vehicleTypes = [];
-let layout = { uavs: [], ugvs: [], world: "" };
+let layout = { uavs: [], ugvs: [], static_anchors: [], world: "" };
 
 // ---------------------------------------------------------------------------
 // small DOM helper
@@ -73,7 +83,11 @@ function setStatus(id, msg, ok) {
 async function api(path, opts) {
   const res = await fetch(path, opts);
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.error || res.statusText);
+  if (!res.ok) {
+    const err = new Error(data.error || res.statusText);
+    err.status = res.status;
+    throw err;
+  }
   return data;
 }
 
@@ -103,8 +117,8 @@ function nextId(list) {
 
 function nextGlobalSensorId() {
   const used = new Set([
-    ...layout.uavs.flatMap((v) => (v.tags || []).map((t) => t.id)),
-    ...layout.ugvs.flatMap((v) => (v.anchors || []).map((a) => a.id)),
+    ...[...layout.uavs, ...layout.ugvs].flatMap((v) => [...(v.tags || []), ...(v.anchors || [])].map((s) => s.id)),
+    ...layout.static_anchors.map((a) => a.id),
   ]);
   let i = 1;
   while (used.has(i)) i++;
@@ -124,19 +138,21 @@ function addVehicle(kind) {
     spawn_pose: [0, 0, 0, 0, 0, 0],
     offboard: JSON.parse(JSON.stringify(kind === "uav" ? DEFAULT_UAV_OFFBOARD : DEFAULT_UGV_OFFBOARD)),
   };
-  vehicle[kind === "uav" ? "tags" : "anchors"] = [];
+  vehicle.tags = [];
+  vehicle.anchors = [];
   list.push(vehicle);
   renderVehicles();
 }
 
-function addSensor(kind, vehicle) {
-  const key = kind === "uav" ? "tags" : "anchors";
-  vehicle[key] = vehicle[key] || [];
-  vehicle[key].push({ id: nextGlobalSensorId(), position: [0, 0, 0] });
+// `owner[key]` holds the sensor list: a robot's "tags" or "anchors", or the
+// layout's own "static_anchors".
+function addSensor(key, owner) {
+  owner[key] = owner[key] || [];
+  owner[key].push({ id: nextGlobalSensorId(), position: [0, 0, 0] });
   renderVehicles();
 }
 
-function renderSensorRow(kind, vehicle, sensor) {
+function renderSensorRow(key, owner, sensor) {
   const row = el("div", { class: "sensor-row" });
   const idInput = el("input", { type: "number", step: "1", min: "0" });
   idInput.value = sensor.id;
@@ -147,12 +163,21 @@ function renderSensorRow(kind, vehicle, sensor) {
     inp.addEventListener("change", () => (sensor.position[i] = parseFloat(inp.value) || 0));
     row.appendChild(el("label", {}, [axis + " ", inp]));
   });
+  // Optional fixed range offset; empty keeps the preset's random draw.
+  const biasInput = el("input", { type: "number", step: "0.1", placeholder: "random" });
+  biasInput.value = sensor.bias_cm ?? "";
+  biasInput.title = "Fixed range offset of this transceiver in cm. Empty: drawn at random from the preset.";
+  biasInput.addEventListener("change", () => {
+    const value = parseFloat(biasInput.value);
+    if (Number.isFinite(value)) sensor.bias_cm = value;
+    else delete sensor.bias_cm;
+  });
+  row.appendChild(el("label", {}, ["bias cm ", biasInput]));
   row.insertBefore(el("label", {}, ["id ", idInput]), row.firstChild);
   const removeBtn = el("button", { class: "remove-sensor", type: "button", title: "Remove" });
   removeBtn.textContent = "×";
   removeBtn.addEventListener("click", () => {
-    const key = kind === "uav" ? "tags" : "anchors";
-    vehicle[key] = vehicle[key].filter((s) => s !== sensor);
+    owner[key] = owner[key].filter((s) => s !== sensor);
     renderVehicles();
   });
   row.appendChild(removeBtn);
@@ -226,18 +251,17 @@ function renderVehicleCard(kind, vehicle) {
   poseSet.appendChild(poseGrid);
   card.appendChild(poseSet);
 
-  const sensorKey = kind === "uav" ? "tags" : "anchors";
-  const sensorSet = el("fieldset", {}, [
-    el("legend", { text: kind === "uav" ? "tags" : "anchors" }),
-  ]);
-  const sensorList = el("div", { class: "sensor-list" });
-  (vehicle[sensorKey] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(kind, vehicle, sensor)));
-  sensorSet.appendChild(sensorList);
-  const addSensorBtn = el("button", { type: "button" });
-  addSensorBtn.textContent = kind === "uav" ? "+ Add tag" : "+ Add anchor";
-  addSensorBtn.addEventListener("click", () => addSensor(kind, vehicle));
-  sensorSet.appendChild(addSensorBtn);
-  card.appendChild(sensorSet);
+  [["tags", "+ Add tag"], ["anchors", "+ Add anchor"]].forEach(([key, addLabel]) => {
+    const sensorSet = el("fieldset", {}, [el("legend", { text: key })]);
+    const sensorList = el("div", { class: "sensor-list" });
+    (vehicle[key] || []).forEach((sensor) => sensorList.appendChild(renderSensorRow(key, vehicle, sensor)));
+    sensorSet.appendChild(sensorList);
+    const addSensorBtn = el("button", { type: "button" });
+    addSensorBtn.textContent = addLabel;
+    addSensorBtn.addEventListener("click", () => addSensor(key, vehicle));
+    sensorSet.appendChild(addSensorBtn);
+    card.appendChild(sensorSet);
+  });
 
   const obSet = el("fieldset", {}, [el("legend", { text: "offboard" })]);
   obSet.appendChild(renderOffboardFields(vehicle));
@@ -253,6 +277,9 @@ function renderVehicles() {
   ugvList.innerHTML = "";
   layout.uavs.forEach((v) => uavList.appendChild(renderVehicleCard("uav", v)));
   layout.ugvs.forEach((v) => ugvList.appendChild(renderVehicleCard("ugv", v)));
+  const staticList = document.getElementById("static-anchor-list");
+  staticList.innerHTML = "";
+  layout.static_anchors.forEach((a) => staticList.appendChild(renderSensorRow("static_anchors", layout, a)));
 }
 
 async function refreshLayoutPresets() {
@@ -278,9 +305,10 @@ async function refreshVehicleTypes() {
 
 document.getElementById("add-uav").addEventListener("click", () => addVehicle("uav"));
 document.getElementById("add-ugv").addEventListener("click", () => addVehicle("ugv"));
+document.getElementById("add-static-anchor").addEventListener("click", () => addSensor("static_anchors", layout));
 
 document.getElementById("layout-new").addEventListener("click", () => {
-  layout = { uavs: [], ugvs: [], world: "" };
+  layout = { uavs: [], ugvs: [], static_anchors: [], world: "" };
   renderVehicles();
   document.getElementById("world-input").value = "";
   setStatus("layout-status", "New empty layout.");
@@ -291,9 +319,15 @@ document.getElementById("layout-load").addEventListener("click", async () => {
   if (!name) return;
   try {
     const data = await api("/api/layouts/" + encodeURIComponent(name));
-    layout = { uavs: data.uavs || [], ugvs: data.ugvs || [], world: data.world || "" };
-    layout.uavs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UAV_OFFBOARD))));
-    layout.ugvs.forEach((v) => (v.offboard = v.offboard || JSON.parse(JSON.stringify(DEFAULT_UGV_OFFBOARD))));
+    layout = {
+      uavs: data.uavs || [],
+      ugvs: data.ugvs || [],
+      static_anchors: data.static_anchors || [],
+      world: data.world || "",
+    };
+    // Fields a layout leaves out show their defaults, which match configure_uwb_layout.py's.
+    layout.uavs.forEach((v) => (v.offboard = { ...DEFAULT_UAV_OFFBOARD, ...(v.offboard || {}) }));
+    layout.ugvs.forEach((v) => (v.offboard = { ...DEFAULT_UGV_OFFBOARD, ...(v.offboard || {}) }));
     renderVehicles();
     document.getElementById("layout-filename").value = name;
     document.getElementById("world-input").value = layout.world;
@@ -333,6 +367,32 @@ document.getElementById("layout-save").addEventListener("click", async () => {
 
 let paramGroups = [];
 let paramValues = {};
+let currentParamsPreset = null;
+// [{name, builtin}] from /api/params/presets. Built-in presets are
+// read-only (the backend refuses to overwrite them).
+let paramPresets = [];
+// paramValues as last loaded/saved, to tell whether the form has been
+// edited since -- Continue only re-saves a preset when it has.
+let paramValuesSnapshot = "{}";
+
+function markParamsClean() {
+  paramValuesSnapshot = JSON.stringify(paramValues);
+}
+
+function paramsDirty() {
+  return JSON.stringify(paramValues) !== paramValuesSnapshot;
+}
+
+function isBuiltinPreset(name) {
+  return paramPresets.some((p) => p.name === name && p.builtin);
+}
+
+function suggestCustomPresetName(name) {
+  const input = document.getElementById("params-preset-name");
+  input.value = name + "_custom";
+  input.focus();
+  input.select();
+}
 
 function renderParamRow(key) {
   const ui = PARAM_UI[key] || { type: "text" };
@@ -344,6 +404,13 @@ function renderParamRow(key) {
     cb.checked = !!paramValues[key];
     cb.addEventListener("change", () => (paramValues[key] = cb.checked));
     row.appendChild(cb);
+    row.appendChild(el("span"));
+  } else if (ui.type === "select") {
+    const select = el("select", {});
+    ui.options.forEach((optValue) => select.appendChild(el("option", { value: optValue, text: optValue })));
+    select.value = paramValues[key];
+    select.addEventListener("change", () => (paramValues[key] = select.value));
+    row.appendChild(select);
     row.appendChild(el("span"));
   } else if (ui.type === "slider") {
     const range = el("input", {
@@ -391,29 +458,64 @@ function renderParamGroups() {
   });
 }
 
-async function refreshParamPresets() {
-  const names = await api("/api/params/presets");
+async function refreshParamPresets(selected) {
+  paramPresets = await api("/api/params/presets");
   const select = document.getElementById("params-preset");
-  select.querySelectorAll("option:not(:first-child)").forEach((o) => o.remove());
-  names.forEach((n) => select.appendChild(el("option", { value: n, text: n })));
+  select.innerHTML = "";
+  paramPresets.forEach((p) =>
+    select.appendChild(el("option", { value: p.name, text: p.builtin ? p.name + " (built-in)" : p.name })),
+  );
+  if (selected && paramPresets.some((p) => p.name === selected)) select.value = selected;
 }
 
 document.getElementById("params-load").addEventListener("click", async () => {
   const name = document.getElementById("params-preset").value;
+  if (!name) return;
   try {
-    if (name) {
-      paramValues = await api("/api/params/presets/" + encodeURIComponent(name));
-      setStatus("params-status", "Loaded preset " + name + ".", true);
-    } else {
-      const data = await api("/api/params");
-      paramValues = data.values;
-      setStatus("params-status", "Loaded current params.yaml.", true);
-    }
+    paramValues = await api("/api/params/presets/" + encodeURIComponent(name));
+    currentParamsPreset = name;
+    markParamsClean();
+    document.getElementById("params-preset-name").value = name;
     renderParamGroups();
+    setStatus(
+      "params-status",
+      isBuiltinPreset(name)
+        ? "Loaded built-in preset " + name + " (read-only: save changes under a new name)."
+        : "Loaded preset " + name + ".",
+      true,
+    );
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
 });
+
+// Saves paramValues as preset `name`. Returns false if the user declined
+// to overwrite an existing preset; throws on any other failure (including
+// trying to save over a built-in preset, which also pre-fills a
+// "<name>_custom" suggestion in the name field).
+async function saveParamPreset(name) {
+  if (isBuiltinPreset(name)) {
+    suggestCustomPresetName(name);
+    throw new Error(name + " is a built-in preset and can't be overwritten. Save your changes under a new name.");
+  }
+  const url = "/api/params/presets/" + encodeURIComponent(name);
+  const opts = {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(paramValues),
+  };
+  try {
+    await api(url, opts);
+  } catch (e) {
+    if (e.status !== 409) throw e;
+    if (!confirm('Preset "' + name + '" already exists. Overwrite it?')) return false;
+    await api(url + "?overwrite=1", opts);
+  }
+  currentParamsPreset = name;
+  markParamsClean();
+  await refreshParamPresets(name);
+  return true;
+}
 
 document.getElementById("params-save-preset").addEventListener("click", async () => {
   const name = document.getElementById("params-preset-name").value.trim();
@@ -422,30 +524,11 @@ document.getElementById("params-save-preset").addEventListener("click", async ()
     return;
   }
   try {
-    await api("/api/params/presets/" + encodeURIComponent(name), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(paramValues),
-    });
-    await refreshParamPresets();
-    setStatus("params-status", "Saved preset " + name + ".", true);
-  } catch (e) {
-    setStatus("params-status", e.message, false);
-  }
-});
-
-async function applyParams() {
-  await api("/api/params", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(paramValues),
-  });
-}
-
-document.getElementById("params-apply").addEventListener("click", async () => {
-  try {
-    await applyParams();
-    setStatus("params-status", "Applied to params.yaml.", true);
+    if (await saveParamPreset(name)) {
+      setStatus("params-status", "Saved preset " + name + ".", true);
+    } else {
+      setStatus("params-status", "Not saved: " + name + " was left unchanged.", false);
+    }
   } catch (e) {
     setStatus("params-status", e.message, false);
   }
@@ -457,25 +540,97 @@ document.getElementById("params-apply").addEventListener("click", async () => {
 
 document.getElementById("continue-setup").addEventListener("click", async () => {
   const filename = document.getElementById("layout-filename").value.trim() || "uwb_layout_gui.yaml";
+  const presetName = document.getElementById("params-preset-name").value.trim() || currentParamsPreset;
+  if (!presetName) {
+    setStatus("continue-status", "Pick or save a plugin-parameter preset first.", false);
+    return;
+  }
   setStatus("continue-status", "Saving...");
   try {
+    // Re-save the preset only if the form was edited or a different name
+    // was typed -- continuing with an untouched preset (built-in or not)
+    // uses it as-is. Done before saving the layout, so declining an
+    // overwrite doesn't leave a half-finished Continue behind.
+    if (presetName !== currentParamsPreset || paramsDirty()) {
+      if (!(await saveParamPreset(presetName))) {
+        setStatus("continue-status", "Cancelled: pick another preset name, or confirm the overwrite.", false);
+        return;
+      }
+    }
     await saveLayout(filename);
-    await applyParams();
     await api("/api/continue", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ layout_file: filename }),
+      body: JSON.stringify({
+        layout_file: filename,
+        params_preset: presetName,
+        build_px4: document.getElementById("build-px4").checked,
+      }),
     });
-    setStatus("continue-status", "Done -- continuing setup in your terminal. You can close this tab.", true);
+    setStatus("continue-status", "");
     document.getElementById("continue-setup").disabled = true;
+    followSetup();
   } catch (e) {
     setStatus("continue-status", e.message, false);
   }
 });
 
+// Shows setup_simulator.sh's progress until it ends, then closes the page.
+async function followSetup() {
+  const $ = (id) => document.getElementById(id);
+  $("progress-overlay").hidden = false;
+  let last = null;
+  while (true) {
+    try {
+      last = await api("/api/progress");
+    } catch (e) {
+      break; // setup stops the GUI once it has reported the end
+    }
+    $("progress-step").textContent = last.step;
+    const log = $("progress-log");
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent = last.lines.join("\n");
+    if (atBottom) log.scrollTop = log.scrollHeight;
+    $("progress-bar").hidden = last.percent === null;
+    if (last.percent !== null) $("progress-fill").style.width = last.percent + "%";
+    if (last.state !== "running") break;
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+  const final = $("progress-final");
+  $("progress-bar").hidden = true;
+  if (last && last.state === "done") {
+    $("progress-spinner").className = "spinner done";
+    $("progress-title").textContent = "Setup finished";
+    final.className = "progress-final ok";
+    final.textContent = "Launch the simulation from the terminal menu (option 2). This page will close.";
+    setTimeout(() => {
+      window.close();
+      final.textContent = "Launch the simulation from the terminal menu (option 2). You can close this tab.";
+    }, 3000);
+  } else if (last && last.state === "failed") {
+    $("progress-spinner").className = "spinner failed";
+    $("progress-title").textContent = "Setup failed";
+    final.className = "progress-final error";
+    final.textContent = `setup_simulator.sh stopped with exit code ${last.exit_code}. See the log above.`;
+  } else {
+    $("progress-spinner").className = "spinner failed";
+    $("progress-title").textContent = "Lost contact with setup";
+    final.className = "progress-final error";
+    final.textContent = "Check the terminal for how setup ended.";
+  }
+}
+
 // ---------------------------------------------------------------------------
 // init
 // ---------------------------------------------------------------------------
+
+// Re-compiling PX4 is required while the plugin hasn't been built in this container.
+api("/api/build-info").then((info) => {
+  if (info.plugin_built === false) {
+    document.getElementById("build-px4").checked = true;
+    document.getElementById("build-px4-note").textContent = "(required: the plugin isn't built yet)";
+  }
+}).catch(() => {});
 
 (async function init() {
   await Promise.all([
@@ -483,11 +638,14 @@ document.getElementById("continue-setup").addEventListener("click", async () => 
     refreshWorlds(),
     refreshTrajectories(),
     refreshVehicleTypes(),
-    refreshParamPresets(),
   ]);
   renderVehicles();
   const data = await api("/api/params");
   paramGroups = data.groups;
   paramValues = data.values;
+  currentParamsPreset = data.preset || null;
+  markParamsClean();
+  await refreshParamPresets(currentParamsPreset);
+  if (currentParamsPreset) document.getElementById("params-preset-name").value = currentParamsPreset;
   renderParamGroups();
 })();

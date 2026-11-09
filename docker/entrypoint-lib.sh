@@ -98,11 +98,11 @@ ${C_CYAN}${C_BOLD}==================================================
 PX4 SITL, Gazebo Harmonic, and the UWB Gazebo plugin/ROS 2 bridge,
 pre-built and ready to go.
 
-${C_DIM}Tip: UWBPX4Sim/config, uwb_gazebo_plugin, and worlds are bind-mounted
-from the host -- edit a layout, params.yaml, or drop in a custom .sdf
-world there, then re-run setup (option 1) to apply it.
+${C_DIM}Tip: the whole UWBPX4Sim repo is bind-mounted from the host -- edit a
+layout, a plugin-parameter preset, or drop in a custom .sdf world (or the
+C++ plugin itself) there, then re-run setup (option 1) / rebuild to apply it.
 
-Tip: for QGroundControl/Gazebo windows to appear, run on the HOST
+Tip: for Gazebo windows to appear, run on the HOST
 first: xhost +local:docker (see docker-compose.yml's comments for the
 extra step Wayland/XWayland desktops need).
 
@@ -120,8 +120,11 @@ print_menu() {
   # user tell at a glance, before picking option 2, whether a setup is
   # already loaded or still needs to be run first. Checked fresh on every
   # call (not cached) so it reflects setup having *just* finished too.
+  # .setup_env lives in the host-mounted repo and outlives the container,
+  # while the built plugin lives in this container's PX4 tree: both must exist.
   local setup_tick=""
-  if [[ -f "$UWBPX4SIM_DIR/.setup_env" ]]; then
+  local plugin_lib="$PX4_DIR/build/px4_sitl_default/src/modules/simulation/gz_plugins/libUWBGazeboPlugin.so"
+  if [[ -f "$UWBPX4SIM_DIR/.setup_env" && -f "$plugin_lib" ]]; then
     setup_tick=" ${C_GREEN}✓ configured${C_RESET}"
   fi
   cat <<EOF

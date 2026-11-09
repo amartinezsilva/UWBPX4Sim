@@ -11,7 +11,7 @@
 #   3. Copy uwb_gazebo_plugin/ into <PX4-Autopilot>/src/modules/simulation/gz_plugins
 #   4. Register the plugin in gz_plugins/CMakeLists.txt
 #   5. Register the plugin instance in gz_bridge/server.config, with its
-#      parameter values synced from uwb_gazebo_plugin/params.yaml
+#      parameter values synced from a preset under uwb_gazebo_plugin/presets/
 #   6. Copy every custom world (worlds/*.sdf) into PX4, then select one by
 #      name -- from the layout's own `world:` field, --world, or the
 #      terminal picker -- falling back to PX4's default world if the name
@@ -36,9 +36,11 @@ SKIP_ROS=0
 WORLD_ARG=""
 
 CONFIG_DIR="$SCRIPT_DIR/config"
+PARAMS_PRESETS_DIR="$SCRIPT_DIR/uwb_gazebo_plugin/presets"
 GUI_PORT="${UWB_GUI_PORT:-5050}"
 
 LAYOUT_FILE="${UWB_LAYOUT_FILE:-}"
+PARAMS_PRESET="${UWB_PARAMS_PRESET:-}"
 PX4_DIR="${PX4_DIR:-$HOME/PX4-Autopilot}"
 ROS_WS="${ROS_WS:-}"
 
@@ -151,12 +153,28 @@ select_world() {
   done
 }
 
+GUI_PID=""
+GUI_PROGRESS_LOG=""
+GUI_STATUS_FILE=""
+
+finish_gui() {
+  # Tells the GUI how setup ended (its exit code), gives the page a moment
+  # to show it, then stops the GUI.
+  local code="$1"
+  printf '%s\n' "$code" > "$GUI_STATUS_FILE"
+  sleep 4
+  kill "$GUI_PID" 2>/dev/null || true
+  rm -f "$GUI_PROGRESS_LOG" "$GUI_STATUS_FILE"
+}
+
 run_gui() {
-  # Populates LAYOUT_FILE (and, if chosen there, WORLD_ARG) via the browser
-  # GUI instead of the terminal pickers below. Returns 1 on anything short
-  # of a clean finish (missing deps, port taken, GUI closed without
-  # clicking "Continue Setup") so the caller can fall back to select_layout.
-  local gui_dir="$SCRIPT_DIR/gui" selection_file gui_pid
+  # Populates LAYOUT_FILE, PARAMS_PRESET and BUILD_PX4 via the browser GUI
+  # instead of the terminal pickers below. The GUI then stays up and shows
+  # the rest of setup's progress, so the user never has to come back to the
+  # terminal. Returns 1 on anything short of a clean "Continue Setup"
+  # (missing deps, port taken, GUI closed) so the caller can fall back to
+  # select_layout.
+  local gui_dir="$SCRIPT_DIR/gui" selection_file
 
   if [[ ! -f "$gui_dir/app.py" ]]; then
     log_warn "Configuration GUI not found under $gui_dir; using the terminal picker instead."
@@ -169,28 +187,48 @@ run_gui() {
   fi
 
   selection_file="$(mktemp)"
+  GUI_PROGRESS_LOG="$(mktemp)"
+  GUI_STATUS_FILE="$(mktemp)"
 
   echo
   log_info "Configuration GUI: http://localhost:$GUI_PORT"
   log_info "Open that in your browser to build a layout and tune plugin parameters,"
-  log_info "then click 'Continue Setup' there. Ctrl-C here cancels the whole setup."
+  log_info "then click 'Continue Setup' there and follow the rest of setup in the browser."
+  log_info "Ctrl-C here cancels the whole setup."
 
-  python3 "$gui_dir/app.py" --uwb-root "$SCRIPT_DIR" --port "$GUI_PORT" --selection-file "$selection_file" &
-  gui_pid=$!
-  trap 'kill "$gui_pid" 2>/dev/null || true' EXIT INT TERM
-  wait "$gui_pid" || true
-  trap - EXIT INT TERM
+  python3 "$gui_dir/app.py" --uwb-root "$SCRIPT_DIR" --port "$GUI_PORT" --selection-file "$selection_file" \
+    --progress-log "$GUI_PROGRESS_LOG" --status-file "$GUI_STATUS_FILE" --px4-dir "$PX4_DIR" &
+  GUI_PID=$!
+  trap 'kill "$GUI_PID" 2>/dev/null || true' EXIT INT TERM
+  # Wait for "Continue Setup" (the selection file gets written) or the GUI exiting.
+  while kill -0 "$GUI_PID" 2>/dev/null && [[ ! -s "$selection_file" ]]; do
+    sleep 0.5
+  done
 
   if [[ ! -s "$selection_file" ]]; then
+    trap - EXIT INT TERM
     log_warn "GUI exited without finishing; using the terminal picker instead."
-    rm -f "$selection_file"
+    rm -f "$selection_file" "$GUI_PROGRESS_LOG" "$GUI_STATUS_FILE"
+    GUI_PID=""
     return 1
   fi
 
   # shellcheck disable=SC1090
   source "$selection_file"
   rm -f "$selection_file"
-  log_ok "Got layout and settings from the GUI."
+
+  # The GUI stays up to show progress: mirror everything from here on into
+  # its log, and report the exit code when setup ends, however it ends.
+  trap 'finish_gui $?' EXIT
+  trap 'exit 130' INT TERM
+  exec > >(tee -a "$GUI_PROGRESS_LOG") 2>&1
+  # No more terminal questions: the rest follows the GUI's choices and the
+  # prompts' defaults (the world comes from the layout, or PX4's default).
+  ASSUME_YES=1
+  if [[ -z "$DO_BUILD" && -n "${BUILD_PX4:-}" ]]; then
+    DO_BUILD="$BUILD_PX4"
+  fi
+  log_ok "Got layout and settings from the GUI (re-compile PX4: ${DO_BUILD:-no})."
   return 0
 }
 
@@ -241,6 +279,87 @@ select_layout() {
   done
 }
 
+preset_name_from_path() {
+  # Strips presets/<name>.yaml down to just <name>, the user-facing form
+  # (--params <name>, PARAMS_PRESET=<name> from the GUI) used everywhere
+  # presets are referenced, same as the GUI's /api/params/presets/<name>.
+  local base
+  base="$(basename "$1")"
+  base="${base%.yaml}"
+  base="${base%.yml}"
+  printf '%s' "$base"
+}
+
+select_params_preset() {
+  # Populates PARAMS_PRESET (a bare preset name, not a path), either by
+  # listing presets/*.yaml for the user to pick from, or (under -y) by
+  # auto-selecting a sensible default. Mirrors select_layout() above;
+  # unlike worlds, a plugin-parameter preset is mandatory, so an empty
+  # presets dir is an error.
+  local presets=() reply i default
+
+  shopt -s nullglob
+  presets=("$PARAMS_PRESETS_DIR"/*.yaml "$PARAMS_PRESETS_DIR"/*.yml)
+  shopt -u nullglob
+  if (( ${#presets[@]} > 0 )); then
+    mapfile -t presets < <(printf '%s\n' "${presets[@]}" | sort -u)
+  fi
+
+  if (( ${#presets[@]} == 0 )); then
+    log_error "No plugin-parameter preset YAML files found under $PARAMS_PRESETS_DIR"
+    exit 1
+  fi
+
+  if (( ASSUME_YES )); then
+    default="$PARAMS_PRESETS_DIR/eliko_twr.yaml"
+    for i in "${!presets[@]}"; do
+      if [[ "${presets[$i]}" == "$default" ]]; then
+        PARAMS_PRESET="$(preset_name_from_path "$default")"
+        log_info "Non-interactive: selected default plugin-parameter preset $PARAMS_PRESET"
+        return
+      fi
+    done
+    PARAMS_PRESET="$(preset_name_from_path "${presets[0]}")"
+    log_info "Non-interactive: selected plugin-parameter preset $PARAMS_PRESET (first available; no --params given)"
+    return
+  fi
+
+  echo
+  echo "Available plugin-parameter presets in $PARAMS_PRESETS_DIR:"
+  for i in "${!presets[@]}"; do
+    printf '  %d) %s\n' "$((i + 1))" "$(basename "${presets[$i]}")"
+  done
+
+  while true; do
+    read -r -p "Select a plugin-parameter preset [1-${#presets[@]}]: " reply || { log_error "No input received."; exit 1; }
+    if [[ "$reply" =~ ^[0-9]+$ ]] && (( reply >= 1 && reply <= ${#presets[@]} )); then
+      PARAMS_PRESET="$(preset_name_from_path "${presets[$((reply - 1))]}")"
+      return
+    fi
+    echo "Invalid selection: '$reply'. Enter a number between 1 and ${#presets[@]}."
+  done
+}
+
+resolve_params_preset_file() {
+  # Prints the preset file for PARAMS_PRESET, which may be a bare name
+  # (looked up as presets/<name>.yaml or .yml) or a path to any YAML file
+  # (so --params can also point at a preset kept outside the repo).
+  local candidate
+  if [[ "$PARAMS_PRESET" == */* || "$PARAMS_PRESET" == *.yaml || "$PARAMS_PRESET" == *.yml ]]; then
+    if [[ -f "$PARAMS_PRESET" ]]; then
+      printf '%s\n' "$(cd "$(dirname "$PARAMS_PRESET")" && pwd)/$(basename "$PARAMS_PRESET")"
+      return 0
+    fi
+  fi
+  for candidate in "$PARAMS_PRESETS_DIR/$PARAMS_PRESET.yaml" "$PARAMS_PRESETS_DIR/$PARAMS_PRESET.yml"; do
+    if [[ -f "$candidate" ]]; then
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
 print_usage() {
   cat <<EOF
 Usage: $(basename "$0") [options]
@@ -253,16 +372,23 @@ Options:
                        config/*.yaml and prompts you to pick one if the GUI isn't
                        available; auto-selects demo_nlos.yaml, or the
                        first found, under -y)
+  --params NAME|PATH  Plugin-parameter preset to sync into PX4's server.config:
+                       a name under uwb_gazebo_plugin/presets/ (e.g.
+                       lps_tdoa) or a path to a preset YAML (also
+                       settable via UWB_PARAMS_PRESET). If omitted, uses the
+                       one picked in the GUI, or lists the presets and prompts
+                       you to pick one (auto-selects eliko_twr, or
+                       the first found, under -y)
   --no-gui            Skip the browser GUI and go straight to the terminal
-                       layout/world pickers
+                       layout/preset/world pickers
   --px4-dir DIR       PX4-Autopilot checkout (default: \$PX4_DIR or ~/PX4-Autopilot)
   --ros-ws DIR        ROS 2 workspace root (default: \$ROS_WS or auto-detected)
   --world NAME|PATH   World to use, by name -- either a custom one (worlds/*.sdf,
                        always copied into PX4 regardless of this flag) or one PX4
                        already ships (e.g. baylands); a full path to an .sdf file
                        also works. Falls back to PX4's default world if the name
-                       isn't found there. Overrides the layout's own `world:`
-                       field. If omitted (and the layout doesn't set `world:`
+                       isn't found there. Overrides the layout's own 'world:'
+                       field. If omitted (and the layout doesn't set 'world:'
                        either), lists worlds/*.sdf and prompts you to pick one, or
                        none (under -y, keeps PX4's default world unless a world is
                        named by one of those two)
@@ -277,13 +403,15 @@ Options:
   -n, --dry-run       Print what would happen without changing anything
   -h, --help          Show this help message
 
-Environment overrides: UWB_LAYOUT_FILE, PX4_DIR, ROS_WS, UWB_GUI_PORT (default 5050)
+Environment overrides: UWB_LAYOUT_FILE, UWB_PARAMS_PRESET, PX4_DIR, ROS_WS,
+UWB_GUI_PORT (default 5050)
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --layout) LAYOUT_FILE="$2"; shift 2 ;;
+    --params) PARAMS_PRESET="$2"; shift 2 ;;
     --px4-dir) PX4_DIR="$2"; shift 2 ;;
     --ros-ws) ROS_WS="$2"; shift 2 ;;
     --world) WORLD_ARG="$2"; shift 2 ;;
@@ -322,10 +450,24 @@ else
   (( layout_from_gui )) || select_layout
 fi
 
+# Resolve the plugin-parameter preset the same way: --params/
+# UWB_PARAMS_PRESET or the GUI's PARAMS_PRESET (sourced by run_gui above)
+# win; otherwise fall back to the terminal picker. Only needed when the
+# plugin step runs, since that's the only step that reads it.
+PLUGIN_PARAMS_FILE=""
+if (( ! SKIP_PLUGIN )); then
+  [[ -n "$PARAMS_PRESET" ]] || select_params_preset
+  if ! PLUGIN_PARAMS_FILE="$(resolve_params_preset_file)"; then
+    log_error "Plugin-parameter preset not found: $PARAMS_PRESET (looked for a file at that path, then under $PARAMS_PRESETS_DIR)"
+    exit 1
+  fi
+fi
+
 echo "UWBPX4Sim guided setup"
 echo "======================="
 log_info "UWBPX4Sim root : $SCRIPT_DIR"
 log_info "Layout file    : $LAYOUT_FILE"
+log_info "Params preset  : ${PLUGIN_PARAMS_FILE:-<skipped: --skip-plugin>}"
 log_info "PX4-Autopilot  : $PX4_DIR"
 log_info "ROS 2 workspace: ${ROS_WS:-<not found>}"
 (( DRY_RUN )) && log_warn "Dry-run mode: no files will be changed."
@@ -353,7 +495,6 @@ PX4_GZ_MODELS_DIR="$PX4_DIR/Tools/simulation/gz/models"
 PX4_GZ_WORLDS_DIR="$PX4_DIR/Tools/simulation/gz/worlds"
 PX4_GZ_PLUGINS_DIR="$PX4_DIR/src/modules/simulation/gz_plugins"
 PX4_SERVER_CONFIG="$PX4_DIR/src/modules/simulation/gz_bridge/server.config"
-PLUGIN_PARAMS_FILE="$SCRIPT_DIR/uwb_gazebo_plugin/params.yaml"
 
 if (( ! SKIP_PLUGIN || ! SKIP_MODELS )); then
   if [[ ! -d "$PX4_DIR" ]]; then
@@ -426,10 +567,10 @@ else
   log_step "Step 2/6: Copying uwb_gazebo_plugin into PX4"
   PLUGIN_DEST="$PX4_GZ_PLUGINS_DIR/uwb_gazebo_plugin"
   if (( DRY_RUN )); then
-    log_info "[DRY-RUN] rsync -a --delete --exclude COLCON_IGNORE --exclude params.yaml \"$SCRIPT_DIR/uwb_gazebo_plugin/\" \"$PLUGIN_DEST/\""
+    log_info "[DRY-RUN] rsync -a --delete --exclude COLCON_IGNORE --exclude presets/ \"$SCRIPT_DIR/uwb_gazebo_plugin/\" \"$PLUGIN_DEST/\""
   else
     mkdir -p "$PLUGIN_DEST"
-    rsync -a --delete --exclude COLCON_IGNORE --exclude params.yaml "$SCRIPT_DIR/uwb_gazebo_plugin/" "$PLUGIN_DEST/"
+    rsync -a --delete --exclude COLCON_IGNORE --exclude presets/ "$SCRIPT_DIR/uwb_gazebo_plugin/" "$PLUGIN_DEST/"
     log_ok "Copied uwb_gazebo_plugin -> $PLUGIN_DEST"
   fi
 
@@ -491,44 +632,27 @@ PYEOF
     fi
   fi
 
-  log_step "Syncing plugin parameters from params.yaml into gz_bridge/server.config"
+  log_step "Syncing plugin parameters from preset $(basename "$PLUGIN_PARAMS_FILE") into gz_bridge/server.config"
   if (( DRY_RUN )); then
     log_info "[DRY-RUN] would sync $PLUGIN_PARAMS_FILE into the <plugin ... custom::UWBGazeboSystem> block in $PX4_SERVER_CONFIG"
   else
-    result="$(python3 - "$PX4_SERVER_CONFIG" "$PLUGIN_PARAMS_FILE" <<'PYEOF'
+    result="$(python3 - "$PX4_SERVER_CONFIG" "$PLUGIN_PARAMS_FILE" "$SCRIPT_DIR/tools" <<'PYEOF'
 import os
 import re
 import shutil
 import sys
 
-import yaml
-
-PLUGIN_NAME = "custom::UWBGazeboSystem"
-PLUGIN_FILENAME = "libUWBGazeboPlugin.so"
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[3])
+from preset_to_sdf import PLUGIN_NAME, load_preset, plugin_block
 
 server_path, params_path = sys.argv[1], sys.argv[2]
 
-with open(params_path) as f:
-    params = yaml.safe_load(f) or {}
-
-if not isinstance(params, dict):
-    print(f"ERROR: {params_path} must contain a mapping of parameter: value", file=sys.stderr)
+try:
+    new_block = plugin_block(load_preset(params_path), server_config=True)
+except ValueError as exc:
+    print(f"ERROR: {exc}", file=sys.stderr)
     sys.exit(1)
-
-
-def fmt(value):
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    return str(value)
-
-
-block_lines = [
-    f'    <plugin entity_name="*" entity_type="world" filename="{PLUGIN_FILENAME}" name="{PLUGIN_NAME}">'
-]
-for key, value in params.items():
-    block_lines.append(f"      <{key}>{fmt(value)}</{key}>")
-block_lines.append("    </plugin>")
-new_block = "\n".join(block_lines) + "\n"
 
 text = open(server_path).read()
 pattern = re.compile(
@@ -707,7 +831,26 @@ else
     fi
 
     if [[ -d "$ROS_WS/install/px4_sim_offboard" ]]; then
-      log_ok "px4_sim_offboard already built in $ROS_WS/install"
+      # Always recompile from the current source: a rebuilt Docker image
+      # compiles its own checkout, and the mounted source can be older by
+      # file date, so an incremental build would keep stale binaries.
+      # Where install/ links into build/ (--symlink-install, as in the
+      # image), rebuilding build/ is enough and leaves install/ untouched.
+      node_bin="$ROS_WS/install/px4_sim_offboard/lib/px4_sim_offboard/uav_offboard_control"
+      if (( DRY_RUN )); then
+        log_info "[DRY-RUN] would recompile px4_sim_offboard from the current source"
+      elif [[ -L "$node_bin" && -d "$ROS_WS/build/px4_sim_offboard" ]]; then
+        log_info "Recompiling px4_sim_offboard from the current source..."
+        cmake --build "$ROS_WS/build/px4_sim_offboard" --clean-first -j >/dev/null \
+          && log_ok "px4_sim_offboard recompiled" \
+          || log_warn "Recompiling px4_sim_offboard failed; run: cmake --build $ROS_WS/build/px4_sim_offboard --clean-first"
+      else
+        require_command colcon
+        log_info "Rebuilding px4_sim_offboard from the current source..."
+        ( cd "$ROS_WS" && colcon build --packages-select px4_sim_offboard --cmake-clean-first ) \
+          && log_ok "px4_sim_offboard rebuilt" \
+          || log_warn "Rebuilding px4_sim_offboard failed; run: cd $ROS_WS && colcon build --packages-select px4_sim_offboard"
+      fi
     else
       if confirm "Build px4_sim_offboard now with colcon?" y; then
         if (( DRY_RUN )); then

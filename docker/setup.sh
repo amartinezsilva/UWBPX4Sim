@@ -110,7 +110,7 @@ grant_x11() {
       log_ok "xhost +local:docker"
     else
       log_warn "xhost +local:docker failed (no X server / DISPLAY?)."
-      log_warn "GUI apps (QGroundControl, Gazebo) may not be able to open a window."
+      log_warn "Gazebo may not be able to open its window."
     fi
   else
     log_warn "xhost not found -- skipping. GUI apps may not be able to open a window."
@@ -127,35 +127,35 @@ grant_x11() {
 }
 
 fix_bind_mount_perms() {
-  log_step "Granting the container write access to bind-mounted config directories"
+  log_step "Granting the container write access to the bind-mounted repo"
   # The image's non-root user (jazzy) is baked in at a fixed uid/gid
   # (1001:1001) that generally won't match the host user running this
-  # script -- so on the directories bind-mounted into the container (see
-  # docker-compose.yml's volumes:), jazzy is neither the owner nor in the
+  # script -- so on the whole-repo bind mount (see docker-compose.yml's
+  # volumes:, which mounts the entire UWBPX4Sim directory, not just a
+  # handful of subdirs, so edits can be made from the host and only
+  # built/tested in the container), jazzy is neither the owner nor in the
   # owning group, and gets only the "other" permission bits. Host
-  # directories/files created by a normal `mkdir`/editor are typically
-  # mode 775/664, whose "other" bits lack write -- so the setup GUI's
-  # saves (layouts, params.yaml, presets) fail with PermissionError
-  # despite the volume mount itself working fine.
+  # directories/files created by a normal `mkdir`/editor/git-clone are
+  # typically mode 775/664, whose "other" bits lack write -- so the setup
+  # GUI's saves (layouts, plugin-parameter presets) and anything else the
+  # container writes (generated models/bridge config, colcon build output,
+  # etc.) fail with PermissionError despite the volume mount itself
+  # working fine.
   #
   # Fixed the same way as the X11 socket permission in grant_x11: open up
-  # the specific host directories the container needs to write into,
-  # rather than trying to reconcile uids across host and container. o+rwX
-  # adds write for "other" (matching existing owner/group read-write)
-  # without touching execute bits on plain files, and applies recursively
-  # so both directories (for new files) and already-existing files
-  # (layout/params saves that overwrite in place) end up writable.
-  local d
-  for d in "$SCRIPT_DIR/../config" "$SCRIPT_DIR/../uwb_gazebo_plugin"; do
-    if [[ -d "$d" ]]; then
-      if (( DRY_RUN )); then
-        log_info "[DRY-RUN] chmod -R o+rwX $d"
-      else
-        chmod -R o+rwX "$d" && log_ok "$(basename "$d") writable by the container" || \
-          log_warn "Could not chmod $d -- the setup GUI may fail to save there."
-      fi
-    fi
-  done
+  # the whole mounted tree rather than trying to reconcile uids across
+  # host and container. o+rwX adds write for "other" (matching existing
+  # owner/group read-write) without touching execute bits on plain files,
+  # and applies recursively so both directories (for new files) and
+  # already-existing files (saves that overwrite in place) end up
+  # writable.
+  local d="$SCRIPT_DIR/.."
+  if (( DRY_RUN )); then
+    log_info "[DRY-RUN] chmod -R o+rwX $d"
+  else
+    chmod -R o+rwX "$d" && log_ok "repo writable by the container" || \
+      log_warn "Could not chmod $d -- the setup GUI/build may fail to save there."
+  fi
 }
 
 attach_to_container() {
@@ -435,7 +435,7 @@ if (( ! should_run )); then
   echo "  docker exec -it $CONTAINER_NAME /entrypoint.sh"
   echo
   echo "See docker-compose.yml's comments for the extra X11 socket permission"
-  echo "step Wayland/XWayland desktops need for QGroundControl/Gazebo windows"
+  echo "step Wayland/XWayland desktops need for Gazebo windows"
   echo "to appear."
   exit 0
 fi

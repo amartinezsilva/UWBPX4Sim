@@ -186,7 +186,6 @@ private:
     std::mutex pose_mutex_;
 
     Eigen::Vector3d origin_pos_enu_{0.0, 0.0, 0.0};
-	Eigen::Quaterniond origin_q_enu_{1.0, 0.0, 0.0, 0.0}; // w,x,y,z
 
     // Replace/augment your index state with these:
     size_t closest_idx_ = 0;
@@ -224,6 +223,11 @@ private:
 
     rclcpp::Time start_time_;
     bool started_ = false;
+    // A trajectory that doesn't move (e.g. all zeros): the rover is never
+    // armed, so it stays where it spawned instead of spinning in place.
+    bool stationary_ = false;
+    // Set once the rover reaches the end of its path and is disarmed.
+    bool finished_ = false;
 
     // In class AGVOffboardControl private:
     int    last_heading_reset_counter_{-1};
@@ -280,16 +284,9 @@ AGVOffboardControl::AGVOffboardControl()
 						"agv_origin must have 6 elements [x,y,z,roll,pitch,yaw]; using zeros");
 		} else {
 			origin_pos_enu_ = Eigen::Vector3d(agv_origin_vec[0], agv_origin_vec[1], agv_origin_vec[2]);
-
-			// RPY are given in ENU. Build quaternion qz(yaw)*qy(pitch)*qx(roll).
-			const double roll  = agv_origin_vec[3];
-			const double pitch = agv_origin_vec[4];
-			const double yaw   = agv_origin_vec[5];
-
-			origin_q_enu_ =
-				Eigen::AngleAxisd(yaw,   Eigen::Vector3d::UnitZ()) *
-				Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-				Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX());
+			// PX4's local frame in Gazebo keeps the world axes and only moves its origin
+			// to the spawn point, whatever the spawn yaw. So local <-> world is a pure
+			// translation; the spawn roll/pitch/yaw only set the initial attitude.
 			}
 
 
@@ -302,17 +299,10 @@ AGVOffboardControl::AGVOffboardControl()
         anchor_ids_[anchor_key] = anchor_key.size() > 1 ? anchor_key.substr(1) : anchor_key;
     }
 
-    if (anchor_keys_.empty() || !loaded_dynamic_tags) {
-        RCLCPP_FATAL(
-            this->get_logger(),
-            "Invalid UWB config. Required params: anchors and tags.ids.");
-        throw std::runtime_error("Missing required dynamic anchor/tag ID parameters.");
-    }
-
-    if (anchor_keys_.empty() || tag_keys_.empty()) {
-        RCLCPP_FATAL(this->get_logger(), "Invalid UWB config: loaded %zu anchors and %zu tags.",
-                     anchor_keys_.size(), tag_keys_.size());
-        throw std::runtime_error("Empty anchor/tag configuration for AGV offboard control.");
+    // tags.ids lists every tag in the fleet. This UGV's own anchors may be none.
+    if (!loaded_dynamic_tags) {
+        RCLCPP_FATAL(this->get_logger(), "Invalid UWB config. Required param: tags.ids.");
+        throw std::runtime_error("Missing required tag ID parameters.");
     }
 
     uwb_topic_names_.clear();
@@ -349,25 +339,27 @@ AGVOffboardControl::AGVOffboardControl()
     tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(this);
     static_tf_broadcaster_ = std::make_unique<tf2_ros::StaticTransformBroadcaster>(this);
    
-    // Publish static transforms for anchors (relative to agv/base_link)
-    for (const auto& anchor : anchor_keys_) {
-        std::vector<double> anchor_pos;
-        const std::string anchor_numeric = anchor.size() > 1 ? anchor.substr(1) : anchor;
-        const std::string compact_param = "anchors." + anchor_numeric + ".position";
-        const bool loaded = this->get_parameter(compact_param, anchor_pos) && anchor_pos.size() == 3;
-        if (loaded) {
-            geometry_msgs::msg::TransformStamped tf;
-            tf.header.stamp = this->get_clock()->now();
-            tf.header.frame_id = frame_prefix_ + "/base_link";
-            tf.child_frame_id = frame_prefix_ + "/" + anchor;
-            tf.transform.translation.x = anchor_pos[0];
-            tf.transform.translation.y = anchor_pos[1];
-            tf.transform.translation.z = anchor_pos[2];
-            tf.transform.rotation.x = 0.0;
-            tf.transform.rotation.y = 0.0;
-            tf.transform.rotation.z = 0.0;
-            tf.transform.rotation.w = 1.0;
-            static_tf_broadcaster_->sendTransform(tf);
+    // Publish static transforms for this robot's tags and anchors (relative to
+    // agv/base_link). It may carry either, or both.
+    for (const auto &[ns, key_prefix] : {std::pair<std::string, std::string>{"tags", "t"}, {"anchors", "a"}}) {
+        const auto sensors = this->list_parameters({ns}, 10);
+        for (const auto &key : directSensorKeysFromPrefixes(sensors.prefixes, ns, key_prefix)) {
+            std::vector<double> sensor_pos;
+            const std::string compact_param = ns + "." + key.substr(1) + ".position";
+            if (this->get_parameter(compact_param, sensor_pos) && sensor_pos.size() == 3) {
+                geometry_msgs::msg::TransformStamped tf;
+                tf.header.stamp = this->get_clock()->now();
+                tf.header.frame_id = frame_prefix_ + "/base_link";
+                tf.child_frame_id = frame_prefix_ + "/" + key;
+                tf.transform.translation.x = sensor_pos[0];
+                tf.transform.translation.y = sensor_pos[1];
+                tf.transform.translation.z = sensor_pos[2];
+                tf.transform.rotation.x = 0.0;
+                tf.transform.rotation.y = 0.0;
+                tf.transform.rotation.z = 0.0;
+                tf.transform.rotation.w = 1.0;
+                static_tf_broadcaster_->sendTransform(tf);
+            }
         }
     }
    
@@ -577,14 +569,14 @@ AGVOffboardControl::AGVOffboardControl()
                 px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
 
             // Now compose world/map pose
-            Eigen::Vector3d pos_enu_world = origin_q_enu_ * pos_enu_local + origin_pos_enu_;
+            Eigen::Vector3d pos_enu_world = pos_enu_local + origin_pos_enu_;
 
             // Compensate heading resets in NED before converting to ENU.
             const double heading_ned = wrapPi(msg->heading - heading_reset_accum_);
             Eigen::Quaterniond q_heading_ned(Eigen::AngleAxisd(heading_ned, Eigen::Vector3d::UnitZ()));
             Eigen::Quaterniond q_heading_enu =
                 px4_ros_com::frame_transforms::px4_to_ros_orientation(q_heading_ned);
-            Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_heading_enu;
+            Eigen::Quaterniond q_world_enu = q_heading_enu;
 
             // Extract world ENU yaw
             double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
@@ -737,6 +729,8 @@ bool AGVOffboardControl::parseAnchorTagKey(
 void AGVOffboardControl::timer_callback()
 {
 
+    if (stationary_) return;
+
     if (++offboard_counter_ == 10) {
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1);
@@ -789,15 +783,14 @@ void AGVOffboardControl::load_trajectory(const std::string &filename)
 			}
 		}
 		if (i == 4) {
-			// Trajectories are authored in the vehicle-local ENU frame.
-			// Convert them once into world ENU so they align with the
-			// world-frame pose tracked by the controller.
+			// Trajectories are spawn-relative ENU offsets (world axes).
+			// Shift them once into world ENU to match the tracked pose.
 			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = origin_q_enu_ * local_pos_enu + origin_pos_enu_;
+			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
 
 			Eigen::Quaterniond q_local_enu(
 				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_local_enu;
+			Eigen::Quaterniond q_world_enu = q_local_enu;
 			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
 
 			trajectory_.push_back({
@@ -809,6 +802,15 @@ void AGVOffboardControl::load_trajectory(const std::string &filename)
 	}
 	file.close();
 	RCLCPP_INFO(this->get_logger(), "Loaded %zu trajectory points.", trajectory_.size());
+
+	double path_length = 0.0;
+	for (size_t i = 1; i < trajectory_.size(); ++i) {
+		path_length += std::hypot(trajectory_[i][0] - trajectory_[i-1][0], trajectory_[i][1] - trajectory_[i-1][1]);
+	}
+	stationary_ = path_length < 0.05;
+	if (stationary_) {
+		RCLCPP_INFO(this->get_logger(), "Trajectory doesn't move: the rover stays disarmed at its spawn pose.");
+	}
 }
 
 void AGVOffboardControl::publish_offboard_control_mode()
@@ -833,7 +835,7 @@ void AGVOffboardControl::publish_trajectory_setpoint()
 
     if (trajectory_.empty()) return;
 
-    if(!started_) return;
+    if(!started_ || finished_) return;
 
     // ---- Closest-point search in a forward window (like UAV) ----
     const size_t window_size = 50;
@@ -884,7 +886,19 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     // End-of-path stop (optional): if near the last waypoint, stop.
     // If we're very near the end of the path, trigger LAND (once)
 	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
-			return;
+		// Stop for good: PX4 would otherwise keep following the last
+		// setpoint and circle the end point.
+		TrajectorySetpoint stop{};
+		const auto nan = std::numeric_limits<float>::quiet_NaN();
+		stop.position = {nan, nan, nan};
+		stop.velocity = {0.0f, 0.0f, 0.0f};
+		stop.yaw = nan;
+		stop.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+		trajectory_setpoint_publisher_->publish(stop);
+		publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 0);
+		finished_ = true;
+		RCLCPP_INFO(this->get_logger(), "End of trajectory reached: rover stopped and disarmed.");
+		return;
 	}
 
     // ----- SAFE direction: use ex,ey if valid; else use path tangent -----
@@ -904,12 +918,12 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     // --- Convert command to PX4 LOCAL NED ---
     // 1) Velocity: world ENU -> local ENU -> local NED
     Eigen::Vector3d v_world_enu(vx_world_enu, vy_world_enu, vz_world_enu);
-    Eigen::Vector3d v_local_enu = origin_q_enu_.inverse() * v_world_enu;
+    Eigen::Vector3d v_local_enu = v_world_enu;
     Eigen::Vector3d v_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(v_local_enu);
 
     // 2) Yaw: world ENU -> local ENU -> PX4(NED) heading
     Eigen::Quaterniond q_world_enu(Eigen::AngleAxisd(yaw_world_enu, Eigen::Vector3d::UnitZ()));
-    Eigen::Quaterniond q_local_enu = origin_q_enu_.inverse() * q_world_enu;
+    Eigen::Quaterniond q_local_enu = q_world_enu;
     Eigen::Quaterniond q_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_local_enu);
     const double yaw_ned =
         px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_ned);

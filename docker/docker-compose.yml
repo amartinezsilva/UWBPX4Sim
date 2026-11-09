@@ -55,10 +55,16 @@ services:
       # it on the host changes both what's published and what the GUI binds to.
       - "${UWB_GUI_PORT:-5050}:${UWB_GUI_PORT:-5050}"
     volumes:
-      - ../config:/home/jazzy/ros2_ws/src/UWBPX4Sim/config
-      - ../uwb_gazebo_plugin:/home/jazzy/ros2_ws/src/UWBPX4Sim/uwb_gazebo_plugin
-      - ../worlds:/home/jazzy/ros2_ws/src/UWBPX4Sim/worlds
-      - ../gui:/home/jazzy/ros2_ws/src/UWBPX4Sim/gui
+      # The whole repo, live from the host -- not just a handful of
+      # editable subdirs. This also makes .git itself host-backed: commits,
+      # branches etc. made from inside the container are the host's own
+      # (and survive `docker compose run --rm`, which otherwise discards
+      # anything written only into the container's own layer, e.g. the
+      # baked-in clone this image's Dockerfile creates at build time
+      # beneath this same path -- that copy only matters at image-build
+      # time, before any volumes exist; at runtime this mount shadows it
+      # entirely). Edit on the host, rebuild/test in the container.
+      - ..:/home/jazzy/ros2_ws/src/UWBPX4Sim
       # Mounted onto the *installed* path, not the source tree: the offboard
       # nodes load trajectory_csv_file via ament_index_cpp's
       # get_package_share_directory("px4_sim_offboard"), i.e. from
@@ -67,12 +73,6 @@ services:
       # adds the ability to drop in new ones from the host without rebuilding.
       - ../ROS2/px4_sim_offboard/trajectories:/home/jazzy/ros2_ws/install/px4_sim_offboard/share/px4_sim_offboard/trajectories
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    devices:
-      - /dev/fuse
-    cap_add:
-      - SYS_ADMIN
-    security_opt:
-      - apparmor:unconfined
     # NVIDIA GPU passthrough for Gazebo rendering (needs the host's NVIDIA
     # driver + nvidia-container-toolkit installed). This `deploy.resources`
     # form works with plain `docker compose run`/`up` outside Swarm too --

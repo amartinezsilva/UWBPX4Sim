@@ -4,6 +4,7 @@ import sys
 from pathlib import Path
 
 from launch import LaunchDescription
+from launch.actions import ExecuteProcess
 from launch_ros.actions import Node
 
 
@@ -25,11 +26,17 @@ def _layout_file() -> Path:
 
 
 def _uwb_root(layout_file: Path) -> Path:
-    if layout_file.parent.name != "config":
-        raise RuntimeError(
-            f"Expected layout YAML to live under a config/ directory, got: {layout_file}"
-        )
-    return layout_file.parent.parent
+    # Layouts normally live in <repo>/config/. Elsewhere in the repo, the
+    # root is the nearest parent holding the layout tool.
+    if layout_file.parent.name == "config":
+        return layout_file.parent.parent
+    for parent in layout_file.parents:
+        if parent.joinpath(*LAYOUT_TOOL_RELATIVE).exists():
+            return parent
+    raise RuntimeError(
+        f"Layout YAML is neither under a config/ directory nor inside a tree holding "
+        f"{'/'.join(LAYOUT_TOOL_RELATIVE)}: {layout_file}"
+    )
 
 
 def _layout_tool_module(layout_file: Path):
@@ -70,6 +77,36 @@ def generate_launch_description():
                 parameters=[ros_params],
             )
         )
+
+    # Static anchors belong to no robot, so no offboard node publishes their TF.
+    for anchor in layout.static_anchors:
+        x, y, z = anchor.position
+        actions.append(
+            Node(
+                package='tf2_ros',
+                executable='static_transform_publisher',
+                name=f'static_anchor_{anchor.id}_tf',
+                arguments=[
+                    '--x', str(x), '--y', str(y), '--z', str(z),
+                    '--frame-id', 'map',
+                    '--child-frame-id', f'static_anchors/a{anchor.id}',
+                ],
+            )
+        )
+
+    # RViz markers for this layout. Run from the source tree, so it needs no
+    # rebuild; see scripts/uwb_viz.py.
+    uwb_root = _uwb_root(layout_file)
+    actions.append(
+        ExecuteProcess(
+            cmd=[sys.executable, str(uwb_root / 'ROS2' / 'px4_sim_offboard' / 'scripts' / 'uwb_viz.py'),
+                 '--ros-args', '-r', '__node:=uwb_viz',
+                 '-p', f'layout_file:={layout_file}', '-p', f'uwb_root:={uwb_root}',
+                 '-p', f"px4_dir:={os.environ.get('PX4_DIR', str(Path.home() / 'PX4-Autopilot'))}",
+                 '-p', 'use_sim_time:=true'],
+            output='screen',
+        )
+    )
 
     actions.append(
         Node(

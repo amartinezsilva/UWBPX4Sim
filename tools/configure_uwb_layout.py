@@ -4,6 +4,7 @@
 
 This script updates:
   - models/custom_models/<type>_<id>/model.sdf + model.config, one per robot
+  - models/custom_models/uwb_static_anchors/, if the layout has static anchors
   - ROS2/px4_sim_offboard/config/uwb_bridge.yaml
 
 The available vehicle types (x500, r1_rover, ...) are listed in
@@ -18,8 +19,9 @@ uavs:
     model: x500                      # optional, a uav type from models/vehicles.yaml
     spawn_pose: [x, y, z, roll, pitch, yaw]
     offboard: {... per-vehicle ROS/offboard parameters ...}
-    tags:
+    tags:                            # any robot may carry tags, anchors or both
       - {id: 1, position: [x, y, z]}
+      - {id: 2, position: [x, y, z], bias_cm: -9.7}   # optional fixed range offset
       - ...
 ugvs:
   - id: 0
@@ -29,6 +31,12 @@ ugvs:
     anchors:
       - {id: 1, position: [x, y, z]}
       - ...
+static_anchors:                      # optional, fixed in the world instead of on a UGV
+  - {id: 5, position: [x, y, z]}     # world coordinates, same frame as spawn_pose
+  - ...
+
+`uavs` and `ugvs` may each be empty or omitted, as long as the layout still has
+at least one tag and one anchor.
 
 Global tag and anchor ids must be unique. Pair topics remain globally unique as
 `aItJ`, where `I` is the unique anchor id and `J` is the unique tag id.
@@ -41,7 +49,7 @@ import math
 import os
 import re
 import shutil
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, List, Mapping, Optional, Sequence, Tuple
 import yaml
@@ -54,6 +62,7 @@ CUSTOM_MODELS_DIRNAME = "custom_models"
 PX4_GZ_MODELS_SUBDIR = Path("Tools") / "simulation" / "gz" / "models"
 TAG_MESH_FILENAME = "uwb_tag_eliko.stl"
 ANCHOR_MESH_FILENAME = "uwb_anchor_eliko.stl"
+STATIC_ANCHORS_MODEL_NAME = "uwb_static_anchors"
 VEHICLE_ROLES = ("uav", "ugv")
 
 
@@ -61,6 +70,13 @@ VEHICLE_ROLES = ("uav", "ugv")
 class SensorPlacement:
     id: int
     position: Tuple[float, float, float]
+    # Fixed range offset of this transceiver (cm), written to its link as
+    # <uwb:bias_cm>. None leaves the plugin's random per-pair/per-anchor draw.
+    bias_cm: Optional[float] = None
+
+
+# Namespace of the plugin's custom SDF elements (<uwb:material>, <uwb:bias_cm>).
+UWB_XMLNS = "https://github.com/amartinezsilva/UWBPX4Sim"
 
 
 @dataclass(frozen=True)
@@ -100,7 +116,8 @@ class VehicleLayout:
     id: int
     model: VehicleType
     spawn_pose: SpawnPose
-    sensors: List[SensorPlacement]
+    tags: List[SensorPlacement]
+    anchors: List[SensorPlacement]
     offboard: dict[str, Any]
 
 
@@ -114,14 +131,17 @@ class UwbLayout:
     # there, so this can name either kind. None/omitted means PX4's
     # default world.
     world: Optional[str] = None
+    # Anchors fixed in the world, positioned in world coordinates rather than
+    # relative to a robot.
+    static_anchors: List[SensorPlacement] = field(default_factory=list)
 
     @property
     def all_tags(self) -> List[SensorPlacement]:
-        return [sensor for uav in self.uavs for sensor in uav.sensors]
+        return [tag for vehicle in [*self.uavs, *self.ugvs] for tag in vehicle.tags]
 
     @property
     def all_anchors(self) -> List[SensorPlacement]:
-        return [sensor for ugv in self.ugvs for sensor in ugv.sensors]
+        return [anchor for vehicle in [*self.uavs, *self.ugvs] for anchor in vehicle.anchors] + self.static_anchors
 
 
 @dataclass(frozen=True)
@@ -281,10 +301,18 @@ def _parse_sensor_entries(
             raise ValueError(f"Duplicate {sensor_label} id {sensor_id} found in layout.")
         global_seen_ids.add(sensor_id)
 
+        raw_bias = raw_sensor.get("bias_cm")
+        if raw_bias is not None:
+            bias_cm = _to_float(raw_bias, f"{entry_name}.bias_cm")
+            if not math.isfinite(bias_cm):
+                raise ValueError(f"{entry_name}.bias_cm must be a finite number.")
+        else:
+            bias_cm = None
         sensors.append(
             SensorPlacement(
                 id=sensor_id,
                 position=_to_xyz(raw_sensor["position"], f"{entry_name}.position"),
+                bias_cm=bias_cm,
             )
         )
 
@@ -348,9 +376,8 @@ def _parse_vehicle_layouts(
     field_name: str,
     role: str,
     catalog: Mapping[str, VehicleType],
-    sensor_field: str,
-    sensor_label: str,
-    global_seen_sensor_ids: set[int],
+    seen_tag_ids: set[int],
+    seen_anchor_ids: set[int],
 ) -> List[VehicleLayout]:
     if not isinstance(raw_vehicles, list):
         raise ValueError(f"{field_name} must be a list.")
@@ -361,7 +388,7 @@ def _parse_vehicle_layouts(
         entry_name = f"{field_name}[{idx}]"
         if not isinstance(raw_vehicle, dict):
             raise ValueError(
-                f"{entry_name} must be an object with 'id', optional 'spawn_pose', required 'offboard', and '{sensor_field}'."
+                f"{entry_name} must be an object with 'id', optional 'spawn_pose', required 'offboard', 'tags' and/or 'anchors'."
             )
 
         if "id" not in raw_vehicle:
@@ -374,11 +401,17 @@ def _parse_vehicle_layouts(
             raise ValueError(f"Duplicate {field_name[:-1]} id {vehicle_id} found in layout.")
         seen_vehicle_ids.add(vehicle_id)
 
-        sensors = _parse_sensor_entries(
-            raw_vehicle.get(sensor_field, []),
-            field_name=f"{entry_name}.{sensor_field}",
-            sensor_label=sensor_label,
-            global_seen_ids=global_seen_sensor_ids,
+        tags = _parse_sensor_entries(
+            raw_vehicle.get("tags", []),
+            field_name=f"{entry_name}.tags",
+            sensor_label="tag",
+            global_seen_ids=seen_tag_ids,
+        )
+        anchors = _parse_sensor_entries(
+            raw_vehicle.get("anchors", []),
+            field_name=f"{entry_name}.anchors",
+            sensor_label="anchor",
+            global_seen_ids=seen_anchor_ids,
         )
         vehicles.append(
             VehicleLayout(
@@ -387,7 +420,8 @@ def _parse_vehicle_layouts(
                     raw_vehicle.get("model"), role=role, catalog=catalog, field_name=f"{entry_name}.model"
                 ),
                 spawn_pose=_parse_spawn_pose(raw_vehicle.get("spawn_pose"), f"{entry_name}.spawn_pose"),
-                sensors=sensors,
+                tags=tags,
+                anchors=anchors,
                 offboard=_to_mapping(raw_vehicle["offboard"], f"{entry_name}.offboard"),
             )
         )
@@ -401,30 +435,31 @@ def load_layout(layout_path: Path, catalog_path: Optional[Path] = None) -> UwbLa
     if not isinstance(data, dict):
         raise ValueError("Layout file must be a mapping/object.")
 
-    if "uavs" not in data or "ugvs" not in data:
-        raise ValueError("Layout file must include both 'uavs' and 'ugvs'.")
-
     catalog = load_vehicle_catalog(catalog_path or DEFAULT_UWB_ROOT / VEHICLE_CATALOG_RELPATH)
     seen_tag_ids: set[int] = set()
     seen_anchor_ids: set[int] = set()
 
     uavs = _parse_vehicle_layouts(
-        data["uavs"],
+        data.get("uavs") or [],
         field_name="uavs",
         role="uav",
         catalog=catalog,
-        sensor_field="tags",
-        sensor_label="tag",
-        global_seen_sensor_ids=seen_tag_ids,
+        seen_tag_ids=seen_tag_ids,
+        seen_anchor_ids=seen_anchor_ids,
     )
     ugvs = _parse_vehicle_layouts(
-        data["ugvs"],
+        data.get("ugvs") or [],
         field_name="ugvs",
         role="ugv",
         catalog=catalog,
-        sensor_field="anchors",
+        seen_tag_ids=seen_tag_ids,
+        seen_anchor_ids=seen_anchor_ids,
+    )
+    static_anchors = _parse_sensor_entries(
+        data.get("static_anchors") or [],
+        field_name="static_anchors",
         sensor_label="anchor",
-        global_seen_sensor_ids=seen_anchor_ids,
+        global_seen_ids=seen_anchor_ids,
     )
 
     world = data.get("world")
@@ -437,6 +472,7 @@ def load_layout(layout_path: Path, catalog_path: Optional[Path] = None) -> UwbLa
         uavs=uavs,
         ugvs=ugvs,
         world=world,
+        static_anchors=static_anchors,
     )
 
     if not layout.all_anchors:
@@ -563,7 +599,11 @@ def _gen_sensor_link_block(
     step: str,
     spec: SensorVisualSpec,
     label: str,
+    mount_point: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+    frame: str = "base_link",
 ) -> str:
+    """`mount_point` is where the sensor's bar ends, in the same frame as
+    `sensor.position`."""
     i1 = base_indent + step
     i2 = i1 + step
     i3 = i2 + step
@@ -571,7 +611,7 @@ def _gen_sensor_link_block(
 
     pose = _fmt_pose(*sensor.position)
     sx, sy, sz = sensor.position
-    bar_vec = (-sx, -sy, -sz)
+    bar_vec = (mount_point[0] - sx, mount_point[1] - sy, mount_point[2] - sz)
     bar_len = math.sqrt(bar_vec[0] * bar_vec[0] + bar_vec[1] * bar_vec[1] + bar_vec[2] * bar_vec[2])
     bar_block = ""
     if bar_len > 1e-6:
@@ -595,8 +635,10 @@ def _gen_sensor_link_block(
 
     return (
         f'{base_indent}<link name="{prefix}_{sensor.id}">\n'
-        f"{i1}<pose>{pose}</pose> <!-- {label} position relative to base_link -->\n"
-        f"{i1}<inertial>\n"
+        f"{i1}<pose>{pose}</pose> <!-- {label} position relative to {frame} -->\n"
+        + (f"{i1}<uwb:bias_cm>{sensor.bias_cm:g}</uwb:bias_cm> <!-- fixed range offset, cm -->\n"
+           if sensor.bias_cm is not None else "")
+        + f"{i1}<inertial>\n"
         f"{i2}<mass>0.0001</mass> <!-- Very small mass -->\n"
         f"{i2}<inertia>\n"
         f"{i3}<ixx>1e-6</ixx>\n"
@@ -670,6 +712,16 @@ def _gen_sensor_block(
     return "\n".join(blocks).rstrip() + ("\n" if blocks else "")
 
 
+def _ensure_uwb_namespace(text: str) -> str:
+    """Declare the uwb: prefix on the <sdf> root, which SDFormat requires
+    for custom elements such as <uwb:bias_cm>. No-op if already declared."""
+    match = re.search(r"<sdf\b[^>]*>", text)
+    if not match or "xmlns:uwb" in match.group(0):
+        return text
+    tag = match.group(0)
+    return text.replace(tag, tag[:-1].rstrip() + f' xmlns:uwb="{UWB_XMLNS}">', 1)
+
+
 def update_model_file(
     model_path: Path,
     *,
@@ -696,6 +748,8 @@ def update_model_file(
         replacement = "\n" + replacement
 
     updated = text[: bounds.start] + replacement + text[bounds.end :]
+    if any(sensor.bias_cm is not None for sensor in sensors):
+        updated = _ensure_uwb_namespace(updated)
     model_path.write_text(updated, encoding="utf-8")
 
 
@@ -774,6 +828,50 @@ def _copy_and_prepare_model_dir(
     return model_sdf
 
 
+def generate_static_anchors_model(target_dir: Path, anchors: Sequence[SensorPlacement], anchor_mesh: Path) -> None:
+    """One static model holding every static anchor. Its links need no joints:
+    a static model has no physics, so they simply stay where they are placed.
+    It has no base_link, so the plugin applies no vehicle body loss to them."""
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    meshes_dir = target_dir / "meshes"
+    meshes_dir.mkdir(parents=True)
+    shutil.copy2(anchor_mesh, meshes_dir / anchor_mesh.name)
+
+    spec = _anchor_visual_spec(STATIC_ANCHORS_MODEL_NAME)
+    links = "\n".join(
+        _gen_sensor_link_block(
+            prefix="uwb_anchor",
+            sensor=anchor,
+            base_indent="    ",
+            step="  ",
+            spec=spec,
+            label="Anchor",
+            mount_point=(anchor.position[0], anchor.position[1], 0.0),  # vertical pole to the ground
+            frame="world",
+        )
+        for anchor in anchors
+    )
+    (target_dir / "model.sdf").write_text(
+        '<?xml version="1.0"?>\n'
+        f'<sdf version="1.9" xmlns:uwb="{UWB_XMLNS}">\n'
+        f'  <model name="{STATIC_ANCHORS_MODEL_NAME}">\n'
+        "    <static>true</static>\n"
+        f"{links}"
+        "  </model>\n"
+        "</sdf>\n",
+        encoding="utf-8",
+    )
+    (target_dir / "model.config").write_text(
+        '<?xml version="1.0"?>\n'
+        "<model>\n"
+        f"  <name>{STATIC_ANCHORS_MODEL_NAME}</name>\n"
+        '  <sdf version="1.9">model.sdf</sdf>\n'
+        "</model>\n",
+        encoding="utf-8",
+    )
+
+
 def _tag_visual_spec(model_name: str) -> SensorVisualSpec:
     return SensorVisualSpec(
         mesh_uri=f"model://{model_name}/meshes/{TAG_MESH_FILENAME}",
@@ -830,6 +928,23 @@ def generate_bridge_yaml(layout: UwbLayout) -> str:
     for anchor_id in anchor_ids:
         for tag_id in tag_ids:
             append_bridge(f"/uwb_gz_simulator/distances_ground_truth/a{anchor_id}t{tag_id}")
+
+    # TDOA topics are always bridged too: the mode comes from the plugin preset,
+    # which the layout doesn't know, and the unused set simply stays idle. The
+    # reference is the lowest anchor id, matching the plugin.
+    tdoa_pairs = [f"a{anchor_ids[0]}a{anchor_id}t{tag_id}" for anchor_id in anchor_ids[1:] for tag_id in tag_ids]
+
+    lines.append("# UWB TDOA topic bridges (GZ_TO_ROS only)")
+    lines.append("")
+
+    for pair in tdoa_pairs:
+        append_bridge(f"/uwb_gz_simulator/tdoa/{pair}")
+
+    lines.append("# UWB TDOA ground-truth topic bridges (GZ_TO_ROS only)")
+    lines.append("")
+
+    for pair in tdoa_pairs:
+        append_bridge(f"/uwb_gz_simulator/tdoa_ground_truth/{pair}")
 
     while lines and lines[-1] == "":
         lines.pop()
@@ -918,6 +1033,12 @@ def node_name(role: str, vehicle_id: int) -> str:
     return f"{role}_offboard_control_{vehicle_id}"
 
 
+def _mounted_sensor_params(vehicle: VehicleLayout) -> dict[str, Any]:
+    params = {f"tags.{tag.id}.position": _flow_vector(list(tag.position)) for tag in vehicle.tags}
+    params.update({f"anchors.{anchor.id}.position": _flow_vector(list(anchor.position)) for anchor in vehicle.anchors})
+    return params
+
+
 def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) -> dict[str, Any]:
     vehicle = assignment.vehicle
     params = resolve_offboard_params(vehicle.offboard, role="uav", vehicle_id=vehicle.id)
@@ -930,6 +1051,7 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "vehicle_command_topic": f"{px4_base}/in/vehicle_command",
         "vehicle_odometry_topic": f"{px4_base}/out/vehicle_odometry",
         "vehicle_local_position_topic": f"{px4_base}/out/vehicle_local_position_v1",
+        "vehicle_status_topic": f"{px4_base}/out/vehicle_status_v1",
         "trajectory_csv_file": params["trajectory_csv_file"],
         "ros_odometry_topic": params["ros_odometry_topic"],
         "ros_gt_topic": params["ros_gt_topic"],
@@ -944,9 +1066,7 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "world_frame_id": params["world_frame_id"],
     }
 
-    for sensor in vehicle.sensors:
-        ros_params[f"tags.{sensor.id}.position"] = _flow_vector(list(sensor.position))
-
+    ros_params.update(_mounted_sensor_params(vehicle))
     return ros_params
 
 
@@ -978,15 +1098,22 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "tags": {"ids": [str(sensor.id) for sensor in layout.all_tags]},
     }
 
-    for sensor in vehicle.sensors:
-        ros_params[f"anchors.{sensor.id}.position"] = _flow_vector(list(sensor.position))
-
+    ros_params.update(_mounted_sensor_params(vehicle))
     return ros_params
+
+
+def offboard_enabled(offboard: Mapping[str, Any]) -> bool:
+    """`offboard: {enabled: false}` spawns the vehicle without an offboard node:
+    PX4 is never armed, so the vehicle stays exactly where it spawned. (The UGV
+    node also leaves a rover disarmed when its trajectory doesn't move.)"""
+    return bool(offboard.get("enabled", True))
 
 
 def build_offboard_launch_entries(layout: UwbLayout) -> List[Tuple[str, str, dict[str, Any]]]:
     entries: List[Tuple[str, str, dict[str, Any]]] = []
     for assignment in iter_spawn_assignments(layout):
+        if not offboard_enabled(assignment.vehicle.offboard):
+            continue
         if assignment.vehicle_type == "uav":
             entries.append(
                 (node_name("uav", assignment.vehicle.id), "uav_offboard_control", build_uav_offboard_params(layout, assignment))
@@ -1014,6 +1141,11 @@ def main() -> None:
         "--emit-world",
         action="store_true",
         help="Print the layout's 'world' field (empty if unset) instead of generating models and bridge files.",
+    )
+    parser.add_argument(
+        "--emit-static-anchors-model",
+        action="store_true",
+        help="Print the static anchors model name (empty if the layout has none) instead of generating models and bridge files.",
     )
     parser.add_argument(
         "--layout",
@@ -1052,6 +1184,10 @@ def main() -> None:
         print(layout.world or "")
         return
 
+    if args.emit_static_anchors_model:
+        print(STATIC_ANCHORS_MODEL_NAME if layout.static_anchors else "")
+        return
+
     models_dir = uwb_root / "models"
     custom_models_dir = models_dir / CUSTOM_MODELS_DIRNAME
     px4_models_dir = args.px4_dir.resolve() / PX4_GZ_MODELS_SUBDIR
@@ -1075,29 +1211,42 @@ def main() -> None:
     custom_models_dir.mkdir(parents=True, exist_ok=True)
 
     generated_model_dirs: List[Path] = []
-    for vehicle_role, vehicle in iter_spawn_vehicles(layout):
+    for _, vehicle in iter_spawn_vehicles(layout):
         vehicle_type = vehicle.model
         model_name = vehicle_type.model_name(vehicle.id)
-        is_uav = vehicle_role == "uav"
         target_dir = custom_models_dir / model_name
         model_sdf = _copy_and_prepare_model_dir(
             template_dir=vehicle_type.resolve_template_dir(px4_models_dir, uwb_root),
             target_dir=target_dir,
             target_model_name=model_name,
-            extra_meshes=(tag_mesh if is_uav else anchor_mesh,),
+            extra_meshes=(tag_mesh, anchor_mesh),
         )
         update_model_file(
             model_sdf,
-            prefix="uwb_tag" if is_uav else "uwb_anchor",
-            sensors=vehicle.sensors,
-            spec=_tag_visual_spec(model_name) if is_uav else _anchor_visual_spec(model_name),
-            label="Tag" if is_uav else "Anchor",
+            prefix="uwb_tag",
+            sensors=vehicle.tags,
+            spec=_tag_visual_spec(model_name),
+            label="Tag",
+        )
+        update_model_file(
+            model_sdf,
+            prefix="uwb_anchor",
+            sensors=vehicle.anchors,
+            spec=_anchor_visual_spec(model_name),
+            label="Anchor",
         )
         if vehicle_type.plugins_from is not None:
             _append_plugin_blocks(
                 model_sdf, _extract_plugin_blocks(px4_models_dir / vehicle_type.plugins_from / "model.sdf")
             )
         generated_model_dirs.append(target_dir)
+
+    static_anchors_dir = custom_models_dir / STATIC_ANCHORS_MODEL_NAME
+    if layout.static_anchors:
+        generate_static_anchors_model(static_anchors_dir, layout.static_anchors, anchor_mesh)
+        generated_model_dirs.append(static_anchors_dir)
+    elif static_anchors_dir.exists():
+        shutil.rmtree(static_anchors_dir)  # left over from a previous layout
 
     bridge_targets: List[Path] = []
     if not args.skip_bridge:
@@ -1118,7 +1267,7 @@ def main() -> None:
         "Updated UWB layout:\n"
         f"  - {len(layout.ugvs)} UGV model(s)\n"
         f"  - {len(layout.uavs)} UAV model(s)\n"
-        f"  - {len(layout.all_anchors)} anchor(s)\n"
+        f"  - {len(layout.all_anchors)} anchor(s), {len(layout.static_anchors)} of them static\n"
         f"  - {len(layout.all_tags)} tag(s)\n"
         "Generated models:\n"
         f"{_format_generated_model_paths(generated_model_dirs)}"

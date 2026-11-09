@@ -1,0 +1,70 @@
+# UWBGazeboSystem plugin parameters -- "eliko_twr" preset.
+#
+# Calibrated from the author's own identification dataset collected with a
+# real Eliko UWB system (TWR hardware) plus the Eliko datasheet -- see
+# "UWBPX4Sim: Ultra-Wideband simulator for multi-robot applications"
+# (Robot Meets Ranging workshop, ICRA 2026), Section II-B and Table II.
+# Measured in LOS: sigma ~ 12 cm and ~zero bias at short range (< 10 m);
+# from the datasheet: ~75 m maximum range, ~50 cm noise near it. The
+# link-budget parameters below reproduce those points exactly (12 cm up to
+# 15 m, 50 cm at 75 m, 2% dropout up to ~15 m, no measurement beyond 75 m);
+# between them the curves follow the link budget's shape. NLOS is not
+# calibrated by this dataset (it was recorded in LOS): in the absence of an
+# Eliko NLOS calibration, the obstacle and material parameters are UTIL's
+# (lps_tdoa). See docs/measurement_model.md.
+#
+# Load via the setup GUI's "Plugin Parameters" tab (Preset dropdown), or
+# ./setup_simulator.sh --params eliko_twr (or pick it from the
+# terminal picker when --params is omitted).
+
+# Ranging mode: TWR, matching real Eliko hardware (eliko_messages/
+# DistancesList).
+uwb_mode: twr
+topic: /uwb_gz_simulator/distances
+ground_truth_topic: /uwb_gz_simulator/distances_ground_truth
+tdoa_topic: /uwb_gz_simulator/tdoa
+tdoa_ground_truth_topic: /uwb_gz_simulator/tdoa_ground_truth
+# Measurement rate, 1-75 Hz. The calibration used 10 Hz.
+update_rate_hz: 10.0
+
+# Link budget: free-space path loss (n = 2) relative to 1 m. 37.5 dB is
+# 75 m, the datasheet's maximum range.
+path_loss_exponent: 2.0
+max_link_loss_db: 37.5
+
+# Noise: 12 cm (measured) up to 23.5 dB (15 m), 50 cm (datasheet) at
+# 37.5 dB (75 m).
+min_noise_stddev_cm: 12.0
+max_noise_stddev_cm: 50.0
+noise_start_loss_db: 23.5
+noise_end_loss_db: 37.5
+
+# Dropout: 2% floor; logistic link failure least-squares fitted to the
+# paper's LOS dropout curve over 10-70 m (rms error 0.04), then scaled by the
+# plugin to reach 100% at 75 m, so there is no jump into blackout.
+min_dropout_probability: 0.02
+dropout_center_loss_db: 35.5
+dropout_width_db: 1.4
+# From lps_tdoa (no Eliko NLOS calibration): obstacles add noise
+# and bias but don't drop measurements.
+enable_nlos_dropout: true
+
+# Obstacles: from lps_tdoa (no Eliko NLOS calibration).
+nlos_endpoint_margin_m: 0.02
+nlos_min_loss_db: 3.0
+body_shadow_max_loss_db: 10.0
+
+# Materials: from lps_tdoa (no Eliko NLOS calibration). Tag
+# obstacles with <uwb:material> or a "__material_<name>" suffix; untagged ones
+# are the generic material. 4 GHz is DW1000 channel 2: Eliko KIO's FCC grant (FCC ID
+# 2AF2IKIO4) covers 3300-4450 MHz, which only channel 2 fits entirely.
+enable_material_attenuation: true
+carrier_frequency_ghz: 4.0
+material_metal_detour_loss_db: 20.0
+enable_dielectric_delay: false
+
+# Mean and persistent bias: ~zero in the measured LOS data.
+gaussian_noise_mean_cm: 0.0
+apply_pair_bias: false
+bias_min_cm: -27.0
+bias_max_cm: 20.0

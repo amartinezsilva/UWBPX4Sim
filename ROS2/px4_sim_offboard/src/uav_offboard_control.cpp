@@ -44,6 +44,7 @@
 #include <px4_msgs/msg/vehicle_control_mode.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
 
 #include <px4_ros_com/frame_transforms.h>
 
@@ -140,6 +141,14 @@ public:
 		this->get_parameter("vehicle_command_topic", vehicle_command_topic_);
 		this->get_parameter("vehicle_odometry_topic", vehicle_odometry_topic_);
 		this->get_parameter("vehicle_local_position_topic", vehicle_local_position_topic_);
+		// Older generated configs have no vehicle_status_topic: derive it from the command topic.
+		std::string vehicle_status_topic_ = vehicle_command_topic_;
+		const std::string cmd_suffix = "/in/vehicle_command";
+		if (vehicle_status_topic_.size() >= cmd_suffix.size() &&
+		    vehicle_status_topic_.compare(vehicle_status_topic_.size() - cmd_suffix.size(), cmd_suffix.size(), cmd_suffix) == 0) {
+			vehicle_status_topic_.replace(vehicle_status_topic_.size() - cmd_suffix.size(), cmd_suffix.size(), "/out/vehicle_status_v1");
+		}
+		this->get_parameter("vehicle_status_topic", vehicle_status_topic_);
 		this->get_parameter("trajectory_csv_file", traj_file_);
 		this->get_parameter("lookahead_distance", lookahead_distance_);
 		this->get_parameter("ros_odometry_topic", ros_odometry_topic_);
@@ -156,19 +165,6 @@ public:
 
 		this->get_parameter("cruise_speed", cruise_speed_);
 
-		const auto listed = this->list_parameters({"tags"}, 10);
-		tag_keys_ = directSensorKeysFromPrefixes(listed.prefixes, "tags", "t");
-		if (tag_keys_.empty()) {
-			throw std::runtime_error("Missing tag configuration under 'tags'.");
-		}
-		for (const auto &tag_key : tag_keys_) {
-			const std::string tag_numeric = tag_key.size() > 1 ? tag_key.substr(1) : tag_key;
-			const std::string compact_param = "tags." + tag_numeric + ".position";
-			if (!this->has_parameter(compact_param)) {
-				throw std::runtime_error("Missing tag position parameter: " + compact_param);
-			}
-		}
-
 		pos_scale_err_ = odom_error_position_ / 100.0;
 		yaw_scale_err_ = odom_error_angle_   / 100.0;
 
@@ -179,16 +175,9 @@ public:
 						"uav_origin must have 6 elements [x,y,z,roll,pitch,yaw]; using zeros");
 		} else {
 			origin_pos_enu_ = Eigen::Vector3d(uav_origin_vec[0], uav_origin_vec[1], uav_origin_vec[2]);
-
-			// RPY are given in ENU. Build quaternion qz(yaw)*qy(pitch)*qx(roll).
-			const double roll  = uav_origin_vec[3];
-			const double pitch = uav_origin_vec[4];
-			const double yaw   = uav_origin_vec[5];
-
-			origin_q_enu_ =
-				Eigen::AngleAxisd(yaw,   Eigen::Vector3d::UnitZ()) *
-				Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-				Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX());
+			// PX4's local frame in Gazebo keeps the world axes and only moves its origin
+			// to the spawn point, whatever the spawn yaw. So local <-> world is a pure
+			// translation; the spawn roll/pitch/yaw only set the initial attitude.
 		}
 		
 		std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
@@ -218,24 +207,26 @@ public:
 		// Set QoS to match PX4 publisher
 		rclcpp::QoS qos_profile = rclcpp::SensorDataQoS();
 
-		for (const auto& tag : tag_keys_) {
-			std::vector<double> tag_pos;
-			const std::string tag_numeric = tag.size() > 1 ? tag.substr(1) : tag;
-			const std::string compact_param = "tags." + tag_numeric + ".position";
-			const bool loaded = this->get_parameter(compact_param, tag_pos) && tag_pos.size() == 3;
-			if (loaded) {
-				geometry_msgs::msg::TransformStamped tf;
-				tf.header.stamp = this->get_clock()->now();
-				tf.header.frame_id = frame_prefix_ + "/base_link";
-				tf.child_frame_id = frame_prefix_ + "/" + tag;
-				tf.transform.translation.x = tag_pos[0];
-				tf.transform.translation.y = tag_pos[1];
-				tf.transform.translation.z = tag_pos[2];
-				tf.transform.rotation.x = 0.0;
-				tf.transform.rotation.y = 0.0;
-				tf.transform.rotation.z = 0.0;
-				tf.transform.rotation.w = 1.0;
-				static_tf_broadcaster_->sendTransform(tf);
+		// This robot may carry tags, anchors or both.
+		for (const auto &[ns, key_prefix] : {std::pair<std::string, std::string>{"tags", "t"}, {"anchors", "a"}}) {
+			const auto listed = this->list_parameters({ns}, 10);
+			for (const auto &key : directSensorKeysFromPrefixes(listed.prefixes, ns, key_prefix)) {
+				std::vector<double> sensor_pos;
+				const std::string compact_param = ns + "." + key.substr(1) + ".position";
+				if (this->get_parameter(compact_param, sensor_pos) && sensor_pos.size() == 3) {
+					geometry_msgs::msg::TransformStamped tf;
+					tf.header.stamp = this->get_clock()->now();
+					tf.header.frame_id = frame_prefix_ + "/base_link";
+					tf.child_frame_id = frame_prefix_ + "/" + key;
+					tf.transform.translation.x = sensor_pos[0];
+					tf.transform.translation.y = sensor_pos[1];
+					tf.transform.translation.z = sensor_pos[2];
+					tf.transform.rotation.x = 0.0;
+					tf.transform.rotation.y = 0.0;
+					tf.transform.rotation.z = 0.0;
+					tf.transform.rotation.w = 1.0;
+					static_tf_broadcaster_->sendTransform(tf);
+				}
 			}
 		}
 
@@ -403,6 +394,18 @@ public:
 			ros_odometry_publisher_->publish(odom_msg);
 		});
 
+		vehicle_status_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
+			vehicle_status_topic_, qos_profile,
+			[this](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
+				have_status_ = true;
+				if (!engaged_ &&
+				    msg->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
+				    msg->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
+					engaged_ = true;
+					RCLCPP_INFO(this->get_logger(), "Armed in offboard mode.");
+				}
+			});
+
 		vehicle_local_position_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleLocalPosition>(
 			vehicle_local_position_topic_, qos_profile,
 			[this](const px4_msgs::msg::VehicleLocalPosition::SharedPtr msg) {
@@ -440,7 +443,7 @@ public:
 
 				// --- Convert to local ENU, then compose with world origin ---
 				Eigen::Vector3d pos_enu_local  = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
-				Eigen::Vector3d pos_enu_world  = origin_q_enu_ * pos_enu_local + origin_pos_enu_;
+				Eigen::Vector3d pos_enu_world  = pos_enu_local + origin_pos_enu_;
 
 					// Compensate heading resets in NED before converting to ENU.
 					const double heading_ned = wrapPi(msg->heading - heading_reset_accum_);
@@ -449,7 +452,7 @@ public:
 					px4_ros_com::frame_transforms::px4_to_ros_orientation(q_heading_ned);
 
 				// compose with world origin orientation
-				Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_heading_enu;
+				Eigen::Quaterniond q_world_enu = q_heading_enu;
 
 				// Extract world ENU yaw (for your controller state)
 				double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
@@ -523,19 +526,27 @@ public:
 
 		auto timer_callback = [this]() -> void {
 
-			if (offboard_setpoint_counter_ == 10) {
-				// Change to Offboard mode after 10 setpoints
+			// Change to Offboard mode and arm after 10 setpoints. Commands sent
+			// before the DDS link to PX4 has matched are dropped, so while
+			// vehicle_status doesn't confirm armed + offboard, resend every second
+			// (never after LAND). Without vehicle_status, send once as before.
+			const auto now = this->get_clock()->now();
+			const bool retry = have_status_ && !engaged_ && !land_sent_ &&
+			                   offboard_setpoint_counter_ >= 10 && (now - start_time_).seconds() >= 1.0;
+			if (offboard_setpoint_counter_ == 10 || retry) {
+				if (retry) {
+					RCLCPP_WARN(this->get_logger(), "Arm/offboard not confirmed by PX4 yet, resending.");
+				}
 				this->publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
 
 				// Arm the vehicle
 				this->arm();
-				start_time_ = this->get_clock()->now();
+				start_time_ = now;
 
 			}
 
-			if (!started_ && offboard_setpoint_counter_ >= 10){
+			if (!started_ && offboard_setpoint_counter_ >= 10 && (engaged_ || !have_status_)){
 				//Wait a bit for the drone to take off
-				auto now = this->get_clock()->now();
 				if ((now - start_time_).seconds() >= 2.0) {
 					started_ = true;
 				}
@@ -577,6 +588,9 @@ private:
 	rclcpp::Publisher<visualization_msgs::msg::MarkerArray>::SharedPtr marker_array_pub_;
 	rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_subscriber_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_subscriber_;
+	rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_subscriber_;
+	bool have_status_ = false;  // a vehicle_status message has been received
+	bool engaged_ = false;      // PX4 has reported armed + offboard (latched)
 
 	std::atomic<uint64_t> timestamp_;   //!< common synced timestamped
 
@@ -604,7 +618,6 @@ private:
 	double hover_tolerance_ = 0.3;  // meters
 
 	Eigen::Vector3d origin_pos_enu_{0.0, 0.0, 0.0};
-	Eigen::Quaterniond origin_q_enu_{1.0, 0.0, 0.0, 0.0}; // w,x,y,z
 
 		// --- Odometry noise state ---
 		bool have_prev_odom_{false};
@@ -640,7 +653,6 @@ private:
 	std::string frame_prefix_{"uav"};
 	std::string world_frame_id_{"map"};
 	std::string marker_array_topic_{"/uav/gt_marker_array"};
-	std::vector<std::string> tag_keys_;
 
 	std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
 	std::unique_ptr<tf2_ros::StaticTransformBroadcaster> static_tf_broadcaster_;
@@ -677,15 +689,14 @@ void UAVOffboardControl::load_trajectory(const std::string &filename)
 			}
 		}
 		if (i == 4) {
-			// Trajectories are authored in the vehicle-local ENU frame.
-			// Convert them once into world ENU so they can be compared
-			// directly against the world-frame ground-truth pose.
+			// Trajectories are spawn-relative ENU offsets (world axes).
+			// Shift them once into world ENU to match the tracked pose.
 			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = origin_q_enu_ * local_pos_enu + origin_pos_enu_;
+			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
 
 			Eigen::Quaterniond q_local_enu(
 				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_local_enu;
+			Eigen::Quaterniond q_world_enu = q_local_enu;
 			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
 
 			trajectory_.push_back({
@@ -770,13 +781,13 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 		// Convert hover target (world ENU) to local NED for PX4
 		Eigen::Vector3d p_world_enu(initial_hover_target_[0], initial_hover_target_[1], initial_hover_target_[2]);
-		Eigen::Vector3d p_local_enu = origin_q_enu_.inverse() * (p_world_enu - origin_pos_enu_);
+		Eigen::Vector3d p_local_enu = (p_world_enu - origin_pos_enu_);
 		Eigen::Vector3d p_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(p_local_enu);
 
 		// Yaw: build world ENU quaternion, move to local ENU, then to PX4(NED)
 		Eigen::Quaterniond q_hover_world_enu(
 			Eigen::AngleAxisd(initial_hover_target_[3], Eigen::Vector3d::UnitZ()));
-		Eigen::Quaterniond q_hover_local_enu = origin_q_enu_.inverse() * q_hover_world_enu;
+		Eigen::Quaterniond q_hover_local_enu = q_hover_world_enu;
 		Eigen::Quaterniond q_hover_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_hover_local_enu);
 		double yaw_ned = px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_hover_ned);
 
@@ -816,10 +827,19 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 		return;
 	}
 
-	// Step 1: Find the closest point in a forward-looking window
-	size_t window_size = 50;
+	// Step 1: Find the closest point in a forward-looking window, limited by
+	// path length (lookahead + 1 m) rather than by point count, so that on a
+	// path that crosses itself (e.g. a recorded flight with repeated loops) the
+	// search can't jump ahead to a later pass that happens to come close.
+	const double search_length = lookahead_distance_ + 1.0;
 	size_t search_start = closest_idx_;
-	size_t search_end = std::min(closest_idx_ + window_size, trajectory_.size() - 1);
+	size_t search_end = search_start + 1;
+	for (double along = 0.0; search_end < trajectory_.size() && along <= search_length; ++search_end) {
+		const double sx = trajectory_[search_end][0] - trajectory_[search_end - 1][0];
+		const double sy = trajectory_[search_end][1] - trajectory_[search_end - 1][1];
+		const double sz = trajectory_[search_end][2] - trajectory_[search_end - 1][2];
+		along += std::sqrt(sx * sx + sy * sy + sz * sz);
+	}
 
 	double min_dist = std::numeric_limits<double>::max();
 	size_t new_closest_idx = closest_idx_;  // start from last known
@@ -837,7 +857,9 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 	size_t start = new_closest_idx;
 	double accum_dist = 0.0;
-	size_t new_target_idx = start;
+	// Aim at the final point when less than the lookahead distance is left,
+	// so the vehicle reaches the end of the path before landing.
+	size_t new_target_idx = trajectory_.size() - 1;
 
 	for (size_t i = start + 1; i < trajectory_.size(); ++i) {
 		double dx = trajectory_[i][0] - trajectory_[i-1][0];
@@ -864,7 +886,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	double dist = std::sqrt(ex*ex + ey*ey + ez*ez);
 
 	// If we're very near the end of the path, trigger LAND (once)
-	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
+	if ((closest_idx_ >= 0.8*trajectory_.size()) && current_target_idx_ == trajectory_.size() - 1 && dist < 0.4) {
 		land();
 		return;
 	}
@@ -879,7 +901,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	// v_world_enu from your controller (vx, vy, vz in world ENU)
 	Eigen::Vector3d v_world_enu(vx, vy, vz);
 	// Transform velocity to local ENU then to local NED
-	Eigen::Vector3d v_local_enu = origin_q_enu_.inverse() * v_world_enu;
+	Eigen::Vector3d v_local_enu = v_world_enu;
 	Eigen::Vector3d v_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(v_local_enu);
 
 	// Yaw to face the target in world ENU
@@ -887,7 +909,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 	// Convert that yaw to PX4 NED heading
 	Eigen::Quaterniond q_world_enu(Eigen::AngleAxisd(yaw_world_enu, Eigen::Vector3d::UnitZ()));
-	Eigen::Quaterniond q_local_enu = origin_q_enu_.inverse() * q_world_enu;
+	Eigen::Quaterniond q_local_enu = q_world_enu;
 	Eigen::Quaterniond q_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_local_enu);
 	double yaw_ned = px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_ned);
 

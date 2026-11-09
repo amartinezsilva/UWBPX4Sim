@@ -1,0 +1,45 @@
+# Reproduces one of UTIL's NLOS flights (constellation 4, trial 4, trajectory 1;
+# Zhao et al., IJRR 2024): the eight surveyed anchors of constellation 4, the
+# metal and wooden cabinets of worlds/util_nlos.sdf, and the tag's recorded
+# path flown by an x500 at the real flight's mean speed (like every UAV
+# trajectory, the file is relative to spawn_pose). Use it with the
+# lps_tdoa preset: ./setup_simulator.sh --layout config/demo_util_nlos.yaml --params lps_tdoa
+world: util_nlos
+uavs:
+- id: 0
+  offboard:
+    cruise_speed: 0.68
+    lookahead_distance: 0.5
+    odom_error_angle: 0
+    odom_error_position: 0
+    trajectory_csv_file: trajectory_util_nlos_uav.csv
+  spawn_pose: [1.444, -0.095, 0.2, 0, 0, 0]
+  tags:
+  - id: 1
+    position: [0, 0, 0.15]   # tag 0.15 m above the x500's centre
+# bias_cm: each anchor's offset, measured on constellation 4's obstacle-free trial 1
+static_anchors:               # UTIL anchor ids, surveyed positions (m)
+- id: 0
+  position: [-3.0102, -4.0589, 0.1963]
+  bias_cm: -0.2
+- id: 1
+  position: [-3.2587, 3.6966, 2.9102]
+  bias_cm: -2.6
+- id: 2
+  position: [3.6508, 3.733, 0.1896]
+  bias_cm: 0.8
+- id: 3
+  position: [3.5039, -3.9554, 3.0376]
+  bias_cm: -2.4
+- id: 4
+  position: [-2.7909, -4.1354, 2.8476]
+  bias_cm: -6.3
+- id: 5
+  position: [3.9539, -3.7625, 0.2035]
+  bias_cm: 4.1
+- id: 6
+  position: [3.4654, 3.559, 2.9711]
+  bias_cm: -3.1
+- id: 7
+  position: [-3.2112, 3.3041, 0.1762]
+  bias_cm: 9.7
