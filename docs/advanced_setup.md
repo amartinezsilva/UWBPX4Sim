@@ -162,6 +162,17 @@ The layout YAML is structured robot-by-robot. Each vehicle entry contains:
 - `offboard`: the ROS/offboard parameters for that specific robot
 - `tags` and/or `anchors`: the sensor placement relative to the robot body. Any robot can carry either, or both.
 
+Any tag or anchor, including static ones, can also take an optional `bias_cm`: its fixed range offset in cm, for example measured with a short line-of-sight distance test of your own hardware:
+
+```yaml
+    anchors:
+      - id: 1
+        position: [-0.32, 0.3, 0.875]
+        bias_cm: -9.7
+```
+
+In TWR, a pair's offset is the anchor's plus the tag's (a missing one counts as 0); in TDOA, only the anchors' matter, since the tag's cancels. A pair or anchor with no `bias_cm` keeps the preset's random draw. Set offsets apply even with `apply_pair_bias: false`, which only turns the random draw on or off. The setup GUI has a "bias cm" field for each transceiver; leave it empty for the random draw. See [Measurement model: TWR measurement](measurement_model.md#twr-measurement).
+
 Anchors can also be fixed in the world instead of mounted on a robot, with the top-level `static_anchors` list:
 
 ```yaml

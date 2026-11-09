@@ -21,6 +21,7 @@ uavs:
     offboard: {... per-vehicle ROS/offboard parameters ...}
     tags:                            # any robot may carry tags, anchors or both
       - {id: 1, position: [x, y, z]}
+      - {id: 2, position: [x, y, z], bias_cm: -9.7}   # optional fixed range offset
       - ...
 ugvs:
   - id: 0
@@ -69,6 +70,13 @@ VEHICLE_ROLES = ("uav", "ugv")
 class SensorPlacement:
     id: int
     position: Tuple[float, float, float]
+    # Fixed range offset of this transceiver (cm), written to its link as
+    # <uwb:bias_cm>. None leaves the plugin's random per-pair/per-anchor draw.
+    bias_cm: Optional[float] = None
+
+
+# Namespace of the plugin's custom SDF elements (<uwb:material>, <uwb:bias_cm>).
+UWB_XMLNS = "https://github.com/amartinezsilva/UWBPX4Sim"
 
 
 @dataclass(frozen=True)
@@ -293,10 +301,18 @@ def _parse_sensor_entries(
             raise ValueError(f"Duplicate {sensor_label} id {sensor_id} found in layout.")
         global_seen_ids.add(sensor_id)
 
+        raw_bias = raw_sensor.get("bias_cm")
+        if raw_bias is not None:
+            bias_cm = _to_float(raw_bias, f"{entry_name}.bias_cm")
+            if not math.isfinite(bias_cm):
+                raise ValueError(f"{entry_name}.bias_cm must be a finite number.")
+        else:
+            bias_cm = None
         sensors.append(
             SensorPlacement(
                 id=sensor_id,
                 position=_to_xyz(raw_sensor["position"], f"{entry_name}.position"),
+                bias_cm=bias_cm,
             )
         )
 
@@ -620,7 +636,9 @@ def _gen_sensor_link_block(
     return (
         f'{base_indent}<link name="{prefix}_{sensor.id}">\n'
         f"{i1}<pose>{pose}</pose> <!-- {label} position relative to {frame} -->\n"
-        f"{i1}<inertial>\n"
+        + (f"{i1}<uwb:bias_cm>{sensor.bias_cm:g}</uwb:bias_cm> <!-- fixed range offset, cm -->\n"
+           if sensor.bias_cm is not None else "")
+        + f"{i1}<inertial>\n"
         f"{i2}<mass>0.0001</mass> <!-- Very small mass -->\n"
         f"{i2}<inertia>\n"
         f"{i3}<ixx>1e-6</ixx>\n"
@@ -694,6 +712,16 @@ def _gen_sensor_block(
     return "\n".join(blocks).rstrip() + ("\n" if blocks else "")
 
 
+def _ensure_uwb_namespace(text: str) -> str:
+    """Declare the uwb: prefix on the <sdf> root, which SDFormat requires
+    for custom elements such as <uwb:bias_cm>. No-op if already declared."""
+    match = re.search(r"<sdf\b[^>]*>", text)
+    if not match or "xmlns:uwb" in match.group(0):
+        return text
+    tag = match.group(0)
+    return text.replace(tag, tag[:-1].rstrip() + f' xmlns:uwb="{UWB_XMLNS}">', 1)
+
+
 def update_model_file(
     model_path: Path,
     *,
@@ -720,6 +748,8 @@ def update_model_file(
         replacement = "\n" + replacement
 
     updated = text[: bounds.start] + replacement + text[bounds.end :]
+    if any(sensor.bias_cm is not None for sensor in sensors):
+        updated = _ensure_uwb_namespace(updated)
     model_path.write_text(updated, encoding="utf-8")
 
 
@@ -824,7 +854,7 @@ def generate_static_anchors_model(target_dir: Path, anchors: Sequence[SensorPlac
     )
     (target_dir / "model.sdf").write_text(
         '<?xml version="1.0"?>\n'
-        '<sdf version="1.9">\n'
+        f'<sdf version="1.9" xmlns:uwb="{UWB_XMLNS}">\n'
         f'  <model name="{STATIC_ANCHORS_MODEL_NAME}">\n'
         "    <static>true</static>\n"
         f"{links}"

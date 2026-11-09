@@ -4,6 +4,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <exception>
 #include <sstream>
 #include <string>
 #include <unordered_set>
@@ -111,6 +112,39 @@ constexpr double kPositiveEpsilon = 1e-6;
   // xmlns:uwb="...". (SDF's own <material> is visual appearance only.)
   // Empty if there's none.
   const std::string kMaterialElement = "uwb:material";
+
+  // Fixed offset of one transceiver, set on its link inside the model:
+  // <link name="uwb_anchor_1"><uwb:bias_cm>-9.7</uwb:bias_cm>...</link>.
+  // Empty if the link has none or the value isn't a number.
+  const std::string kBiasElement = "uwb:bias_cm";
+  std::optional<double> customLinkBiasCm(const sdf::ElementPtr &_model,
+                                         const std::string &_linkName)
+  {
+    if (!_model || !_model->HasElement("link"))
+      return std::nullopt;
+    for (auto link = _model->GetElement("link"); link; link = link->GetNextElement("link"))
+    {
+      if (!link->HasAttribute("name") ||
+          link->GetAttribute("name")->GetAsString() != _linkName ||
+          !link->HasElement(kBiasElement))
+        continue;
+      const std::string text = link->FindElement(kBiasElement)->Get<std::string>();
+      try
+      {
+        std::size_t used = 0;
+        const double value = std::stod(text, &used);
+        if (text.find_first_not_of(" \t\n\r", used) == std::string::npos && std::isfinite(value))
+          return value;
+      }
+      catch (const std::exception &)
+      {
+      }
+      gzwarn << "[UWBGazeboSystem] <" << kBiasElement << "> of link '" << _linkName
+             << "' isn't a number ('" << text << "'). Ignoring it.\n";
+      return std::nullopt;
+    }
+    return std::nullopt;
+  }
   std::string customMaterialName(const sdf::ElementPtr &_element)
   {
     if (!_element || !_element->HasElement(kMaterialElement))
@@ -526,6 +560,7 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   this->biasCmDist_ =
       std::uniform_real_distribution<double>(this->biasMinCm_, this->biasMaxCm_);
   this->pairBiasCm_.clear();
+  this->configuredBiasCm_.clear();
   this->publishers_.clear();
   this->groundTruthPublishers_.clear();
 
@@ -931,6 +966,23 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		return true;
 	});
 
+	// Offsets configured on the transceivers' links, read once per link.
+	auto configuredBiasCm = [&](const gz::sim::Entity &_link, const std::string &_linkName)
+	{
+		auto it = this->configuredBiasCm_.find(_link);
+		if (it == this->configuredBiasCm_.end())
+		{
+			std::optional<double> value;
+			const auto modelSdf = ecm.Component<gz::sim::components::ModelSdf>(ecm.ParentEntity(_link));
+			if (modelSdf)
+				value = customLinkBiasCm(modelSdf->Data().Element(), _linkName);
+			if (value)
+				gzmsg << "[UWBGazeboSystem] " << _linkName << ": configured bias " << *value << " cm.\n";
+			it = this->configuredBiasCm_.emplace(_link, value).first;
+		}
+		return it->second;
+	};
+
 	// Ensure world AABB is available for LOS/NLOS checks.
 	for (const auto &linkEntity : obstacleLinks)
 	{
@@ -1149,9 +1201,14 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				if (std::bernoulli_distribution(link.dropoutProbability)(this->rng_))
 					continue;
 
-				// r = d + n + beta + b_pair
+				// r = d + n + beta + b_pair. b_pair is the anchor's plus the tag's
+				// configured offset when either has one, else a random draw.
 				double dist = groundTruthDistCm + drawLinkErrorCm(link);
-				if (this->applyPairBias_)
+				const auto anchorBias = configuredBiasCm(anchorEntity, anchorName);
+				const auto tagBias = configuredBiasCm(tagEntity, tagName);
+				if (anchorBias || tagBias)
+					dist += anchorBias.value_or(0.0) + tagBias.value_or(0.0);
+				else if (this->applyPairBias_)
 					dist += persistentBiasCm("a" + anchorName + "t" + tagName);
 
 				// Keep distance physically valid
@@ -1206,7 +1263,10 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 			if (!refDropped)
 			{
 				refErrorCm = drawLinkErrorCm(refLink);
-				if (this->applyPairBias_)
+				// The tag's own offset cancels in the difference.
+				if (const auto bias = configuredBiasCm(refAnchorEntity, refAnchorName))
+					refErrorCm += *bias;
+				else if (this->applyPairBias_)
 					refErrorCm += persistentBiasCm("tdoa_a" + refAnchorId);
 			}
 
@@ -1239,7 +1299,9 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				// The per-anchor bias stands in for antenna delay; the tag's own
 				// delay is common to both legs and cancels in the difference.
 				double legErrorCm = drawLinkErrorCm(link);
-				if (this->applyPairBias_)
+				if (const auto bias = configuredBiasCm(anchorEntity, anchorName))
+					legErrorCm += *bias;
+				else if (this->applyPairBias_)
 					legErrorCm += persistentBiasCm("tdoa_a" + anchorId);
 
 				publishTo(this->publishers_,

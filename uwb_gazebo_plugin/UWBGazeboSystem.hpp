@@ -3,6 +3,7 @@
 #include <gz/sim/System.hh>
 #include <gz/transport/Node.hh>
 #include <gz/transport/Publisher.hh>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 #include <random>
@@ -103,6 +104,9 @@ private:
   unsigned int randomSeed_{0};
 
   std::unordered_map<std::string, double> pairBiasCm_;
+  // Fixed offset set on a tag or anchor link with <uwb:bias_cm>, read once
+  // per link (empty when the link has none, so the random draw applies).
+  std::unordered_map<gz::sim::Entity, std::optional<double>> configuredBiasCm_;
   // Each tag's and anchor's position at the previous update.
   std::unordered_map<gz::sim::Entity, gz::math::Vector3d> lastSensorPosition_;
   std::uniform_real_distribution<double> biasCmDist_{-27.0, 20.0};

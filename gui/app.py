@@ -111,6 +111,12 @@ def validate_layout(layout: dict[str, Any], vehicle_types: list[dict[str, str]])
         if len(v.get("spawn_pose") or []) != 6:
             errors.append(f"UGV {v.get('id')}: spawn_pose must have 6 values.")
 
+    sensors = [s for v in uavs + ugvs for key in ("tags", "anchors") for s in (v.get(key) or [])]
+    for s in sensors + static_anchors:
+        bias = s.get("bias_cm")
+        if bias is not None and (isinstance(bias, bool) or not isinstance(bias, (int, float)) or bias != bias):
+            errors.append(f"Transceiver {s.get('id')}: bias_cm must be a number.")
+
     world = layout.get("world")
     if world is not None and not isinstance(world, str):
         errors.append("world must be a string (a world name).")

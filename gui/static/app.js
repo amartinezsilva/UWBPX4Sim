@@ -163,6 +163,16 @@ function renderSensorRow(key, owner, sensor) {
     inp.addEventListener("change", () => (sensor.position[i] = parseFloat(inp.value) || 0));
     row.appendChild(el("label", {}, [axis + " ", inp]));
   });
+  // Optional fixed range offset; empty keeps the preset's random draw.
+  const biasInput = el("input", { type: "number", step: "0.1", placeholder: "random" });
+  biasInput.value = sensor.bias_cm ?? "";
+  biasInput.title = "Fixed range offset of this transceiver in cm. Empty: drawn at random from the preset.";
+  biasInput.addEventListener("change", () => {
+    const value = parseFloat(biasInput.value);
+    if (Number.isFinite(value)) sensor.bias_cm = value;
+    else delete sensor.bias_cm;
+  });
+  row.appendChild(el("label", {}, ["bias cm ", biasInput]));
   row.insertBefore(el("label", {}, ["id ", idInput]), row.firstChild);
   const removeBtn = el("button", { class: "remove-sensor", type: "button", title: "Remove" });
   removeBtn.textContent = "×";
