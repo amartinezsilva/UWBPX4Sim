@@ -100,13 +100,16 @@ Four ready-made experiments ship in [`config/`](config/). The first two are the 
 | [`demo_util_nlos.yaml`](config/demo_util_nlos.yaml) | One of the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset's real NLOS flights [2]: its eight surveyed anchors, a metal and three wooden cabinets blocking four of them ([`worlds/util_nlos.sdf`](worlds/util_nlos.sdf)), and the recorded path flown by an x500. | `lps_tdoa` |
 | [`demo_lps_twr.yaml`](config/demo_lps_twr.yaml) | One of Pfeiffer et al.'s real TWR flights [3]: the eight surveyed Loco Positioning anchors of the TU Delft Cyberzoo, and the recorded star-shaped path flown by an x500, in line of sight. | `lps_twr` |
 
-![The UTIL NLOS demo in RViz: the drone flies its recorded loops among the eight anchors, with links fading when a measurement drops and the cabinets blocking four anchors](docs/images/demo_util_nlos.gif)
-
-*`demo_util_nlos` in RViz (6x speed): the recorded path, the eight anchors and the live links, with the metal (grey) and wooden (brown) cabinets.*
-
-![The NLOS demo in RViz: the UGV drives along the wall and stops at its corner while the UAV flies around the corner, so their links cross the wall](docs/images/demo_nlos.gif)
-
-*`demo_nlos` in RViz (8x speed, camera following the UAV): the UGV and the UAV, each carrying its own transceivers, move along the wall until the corner puts it between them.*
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/demo_util_nlos.gif" alt="The UTIL NLOS demo in RViz: the drone flies its recorded loops among the eight anchors, with links fading when a measurement drops and the cabinets blocking four anchors"></td>
+    <td width="50%"><img src="docs/images/demo_nlos.gif" alt="The NLOS demo in RViz: the UGV drives along the wall and stops at its corner while the UAV flies around the corner, so their links cross the wall"></td>
+  </tr>
+  <tr>
+    <td><em><code>demo_util_nlos</code> (6x speed): the recorded path, the eight anchors and the live links, with the metal (grey) and wooden (brown) cabinets.</em></td>
+    <td><em><code>demo_nlos</code> (8x speed, camera following the UAV): the UGV and the UAV, each carrying its own transceivers, move along the wall until the corner puts it between them.</em></td>
+  </tr>
+</table>
 
 Run one with its preset, for example:
 
