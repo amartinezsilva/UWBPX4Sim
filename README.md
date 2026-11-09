@@ -89,6 +89,31 @@ static_anchors:                                            # optional, not on a 
 
 Any robot can carry `tags`, `anchors` or both. Tag ids must be unique across the layout, and so must anchor ids. `uavs` and `ugvs` are optional, as long as there is at least one tag and one anchor. See [`config/`](config/) for complete examples. Build layouts from the setup GUI or edit the files directly, then run setup again.
 
+### Demos
+
+Four ready-made experiments ship in [`config/`](config/). The first two are the LOS and NLOS experiments of the UWBPX4Sim paper (Robot Meets Ranging workshop, ICRA 2026), with a UGV-UAV team carrying anchors and tags; the last two reproduce real flights with the Loco Positioning presets:
+
+| Layout | Scenario | Preset |
+| --- | --- | --- |
+| [`demo_los.yaml`](config/demo_los.yaml) | A UGV with four anchors and a UAV with two tags, in open space. The UAV flies 80 m away and back, so noise and dropout grow with distance until the link closes. | `eliko_twr` |
+| [`demo_nlos.yaml`](config/demo_nlos.yaml) | The same team side by side past walls of increasing thickness ([`worlds/walls_nlos.sdf`](worlds/walls_nlos.sdf)): a 25 cm wall (soft NLOS), a 75 cm corner (hard NLOS) and a 120 cm section (blackout). | `eliko_twr` |
+| [`demo_util_nlos.yaml`](config/demo_util_nlos.yaml) | One of the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset's real NLOS flights [2]: its eight surveyed anchors, a metal and three wooden cabinets blocking four of them ([`worlds/util_nlos.sdf`](worlds/util_nlos.sdf)), and the recorded path flown by an x500. | `lps_tdoa` |
+| [`demo_lps_twr.yaml`](config/demo_lps_twr.yaml) | One of Pfeiffer et al.'s real TWR flights [3]: the eight surveyed Loco Positioning anchors of the TU Delft Cyberzoo, and the recorded star-shaped path flown by an x500, in line of sight. | `lps_twr` |
+
+![The UTIL NLOS demo in RViz: the drone flies its recorded loops among the eight anchors, with links fading when a measurement drops and the cabinets blocking four anchors](docs/images/demo_util_nlos.gif)
+
+*`demo_util_nlos` in RViz (6x speed): the recorded path, the eight anchors and the live links, with the metal (grey) and wooden (brown) cabinets.*
+
+![The NLOS demo in RViz: the UGV drives along the wall and stops at its corner while the UAV flies around the corner, so their links cross the wall](docs/images/demo_nlos.gif)
+
+*`demo_nlos` in RViz (8x speed, camera following the UAV): the UGV and the UAV, each carrying its own transceivers, move along the wall until the corner puts it between them.*
+
+Run one with its preset, for example:
+
+```bash
+./setup_simulator.sh --layout config/demo_util_nlos.yaml --params lps_tdoa
+```
+
 To mark an obstacle's material, add a `<uwb:material>` element to its model (or to one of its collisions), and declare the `uwb` prefix on the world's `<sdf>` root:
 
 ```xml

@@ -8,6 +8,8 @@ Publishes on /uwb_viz/markers (visualization_msgs/MarkerArray):
   - one line per tag-anchor pair, bright while measurements arrive on it and
     faint while it drops out (TWR ranges, or TDoA differences using the leg)
   - each robot's recent path
+  - the obstacles of the layout's world, if it's one of worlds/*.sdf: boxes
+    and cylinders, coloured by their UWB material
 
 Robots and transceivers follow the TF frames the offboard nodes publish.
 Robots with `offboard: {enabled: false}` have no node, so their frames are
@@ -42,6 +44,14 @@ FRESH_S = 0.5          # a link counts as live if measured within this time
 TRAIL_PERIOD_S = 0.5
 TRAIL_POINTS = 400
 SENSOR_DIAMETER_M = 0.08
+OBSTACLE_ALPHA = 0.55
+UWB_NS = "{https://github.com/amartinezsilva/UWBPX4Sim}"
+MATERIAL_COLORS = {
+    "metal": (0.55, 0.60, 0.68), "wood": (0.62, 0.42, 0.24), "concrete": (0.60, 0.60, 0.58),
+    "plasterboard": (0.85, 0.83, 0.78), "glass": (0.55, 0.75, 0.85), "plastic": (0.85, 0.55, 0.35),
+    "cardboard": (0.75, 0.62, 0.45), "foam": (0.90, 0.88, 0.70),
+}
+GENERIC_COLOR = (0.70, 0.70, 0.72)
 
 
 # --- small pose maths: (x, y, z, qx, qy, qz, qw) ------------------------------
@@ -133,6 +143,50 @@ def robot_visuals(model_sdf, model_dirs):
     return out
 
 
+def material_of(*elements_and_names):
+    """First <uwb:material> or __material_<name> suffix found, most specific first."""
+    for item in elements_and_names:
+        if isinstance(item, str):
+            if "__material_" in item:
+                return item.rsplit("__material_", 1)[1].lower()
+        elif item is not None:
+            tag = item.find(UWB_NS + "material")
+            if tag is not None and (tag.text or "").strip():
+                return tag.text.strip().lower()
+    return "generic"
+
+
+def world_obstacles(world_sdf):
+    """(pose in the world, size, material) of each box or cylinder collision in
+    the world file, except the ground plane. Included models aren't expanded."""
+    if not world_sdf.is_file():
+        return []
+    world = ET.parse(world_sdf).getroot().find("world")
+    out = []
+    for model in (world.findall("model") if world is not None else []):
+        name = model.get("name", "")
+        if name == "ground_plane":
+            continue
+        model_pose = parse_pose(model.find("pose"))
+        for link in model.findall("link"):
+            link_pose = compose(model_pose, parse_pose(link.find("pose")))
+            for col in link.findall("collision"):
+                geometry = col.find("geometry")
+                if geometry is None:
+                    continue
+                box, cyl = geometry.find("box"), geometry.find("cylinder")
+                if box is not None:
+                    kind, size = "box", [float(x) for x in box.findtext("size").split()]
+                elif cyl is not None:
+                    r, h = float(cyl.findtext("radius")), float(cyl.findtext("length"))
+                    kind, size = "cylinder", [2 * r, 2 * r, h]
+                else:
+                    continue
+                pose = compose(link_pose, parse_pose(col.find("pose")))
+                out.append((kind, pose, size, material_of(col, link.get("name", ""), model, name)))
+    return out
+
+
 class UwbViz(Node):
     def __init__(self):
         super().__init__("uwb_viz")
@@ -175,6 +229,9 @@ class UwbViz(Node):
             self.static_broadcaster = StaticTransformBroadcaster(self)
             self.static_broadcaster.sendTransform(static_tfs)
 
+        world_name = getattr(layout, "world", None)
+        self.obstacles = world_obstacles(uwb_root / "worlds" / f"{world_name}.sdf") if world_name else []
+
         self.tags = sorted(s.id for s in layout.all_tags)
         self.anchors = sorted(s.id for s in layout.all_anchors)
         self.frame = {(k, i): f for f, k, i in self.sensors}
@@ -196,7 +253,7 @@ class UwbViz(Node):
         self.static_markers = self.build_static_markers()
         self.create_timer(0.1, self.publish)
         self.get_logger().info(f"Visualising {len(self.robots)} robots, {len(self.tags)} tags, "
-                               f"{len(self.anchors)} anchors in frame '{self.world}'.")
+                               f"{len(self.anchors)} anchors, {len(self.obstacles)} obstacles in frame '{self.world}'.")
 
     def transform(self, parent, child, pose):
         tf = TransformStamped()
@@ -240,6 +297,13 @@ class UwbViz(Node):
                     m.mesh_resource = uri
                     m.mesh_use_embedded_materials = uri.lower().endswith(".dae")
                 markers.append(m)
+        for i, (kind, pose, size, material) in enumerate(self.obstacles):
+            mtype = Marker.CUBE if kind == "box" else Marker.CYLINDER
+            m = self.marker("obstacles", i, self.world, mtype, MATERIAL_COLORS.get(material, GENERIC_COLOR), OBSTACLE_ALPHA)
+            (m.pose.position.x, m.pose.position.y, m.pose.position.z) = pose[:3]
+            (m.pose.orientation.x, m.pose.orientation.y, m.pose.orientation.z, m.pose.orientation.w) = pose[3:]
+            m.scale.x, m.scale.y, m.scale.z = size
+            markers.append(m)
         for i, (frame, kind, sid) in enumerate(self.sensors):
             color = TAG_COLOR if kind == "tag" else ANCHOR_COLOR
             m = self.marker("sensors", i, frame, Marker.SPHERE, color, 1.0)

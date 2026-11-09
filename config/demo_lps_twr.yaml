@@ -1,0 +1,44 @@
+# Reproduces one of Pfeiffer et al.'s TWR flights (TU Delft Cyberzoo, star
+# trajectory; RA-L 2021): the eight surveyed Loco Positioning anchors, and the
+# tag's recorded path flown by an x500 at the real flight's mean speed, in line
+# of sight (like every UAV trajectory, the file is relative to spawn_pose). Use it with the lps_twr preset:
+#   ./setup_simulator.sh --layout config/demo_lps_twr.yaml --params lps_twr
+world: empty
+uavs:
+- id: 0
+  offboard:
+    cruise_speed: 0.55
+    lookahead_distance: 0.5
+    odom_error_angle: 0
+    odom_error_position: 0
+    trajectory_csv_file: trajectory_lps_star_uav.csv
+  spawn_pose: [0.002, 0.014, 0.2, 0, 0, 0]
+  tags:
+  - id: 1
+    position: [0, 0, 0.15]   # tag 0.15 m above the x500's centre
+# bias_cm: each anchor's offset, measured on the dataset's other flights (not this one)
+static_anchors:               # dataset anchor ids, surveyed positions (m)
+- id: 0
+  position: [-4.48, -4.87, 1.16]
+  bias_cm: -11.8
+- id: 1
+  position: [-4.78, 4.52, 0.67]
+  bias_cm: -13.9
+- id: 2
+  position: [4.81, 4.57, 0.81]
+  bias_cm: -26.0
+- id: 3
+  position: [4.91, -4.77, 0.96]
+  bias_cm: -33.4
+- id: 4
+  position: [-4.34, -5.05, 2.6]
+  bias_cm: -23.1
+- id: 5
+  position: [-4.91, 4.41, 2.65]
+  bias_cm: -23.1
+- id: 6
+  position: [4.56, 4.77, 2.59]
+  bias_cm: -22.4
+- id: 7
+  position: [4.91, -4.77, 2.53]
+  bias_cm: -26.1

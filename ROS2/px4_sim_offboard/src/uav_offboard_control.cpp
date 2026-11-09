@@ -175,16 +175,9 @@ public:
 						"uav_origin must have 6 elements [x,y,z,roll,pitch,yaw]; using zeros");
 		} else {
 			origin_pos_enu_ = Eigen::Vector3d(uav_origin_vec[0], uav_origin_vec[1], uav_origin_vec[2]);
-
-			// RPY are given in ENU. Build quaternion qz(yaw)*qy(pitch)*qx(roll).
-			const double roll  = uav_origin_vec[3];
-			const double pitch = uav_origin_vec[4];
-			const double yaw   = uav_origin_vec[5];
-
-			origin_q_enu_ =
-				Eigen::AngleAxisd(yaw,   Eigen::Vector3d::UnitZ()) *
-				Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-				Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX());
+			// PX4's local frame in Gazebo keeps the world axes and only moves its origin
+			// to the spawn point, whatever the spawn yaw. So local <-> world is a pure
+			// translation; the spawn roll/pitch/yaw only set the initial attitude.
 		}
 		
 		std::string package_path = ament_index_cpp::get_package_share_directory("px4_sim_offboard");
@@ -450,7 +443,7 @@ public:
 
 				// --- Convert to local ENU, then compose with world origin ---
 				Eigen::Vector3d pos_enu_local  = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
-				Eigen::Vector3d pos_enu_world  = origin_q_enu_ * pos_enu_local + origin_pos_enu_;
+				Eigen::Vector3d pos_enu_world  = pos_enu_local + origin_pos_enu_;
 
 					// Compensate heading resets in NED before converting to ENU.
 					const double heading_ned = wrapPi(msg->heading - heading_reset_accum_);
@@ -459,7 +452,7 @@ public:
 					px4_ros_com::frame_transforms::px4_to_ros_orientation(q_heading_ned);
 
 				// compose with world origin orientation
-				Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_heading_enu;
+				Eigen::Quaterniond q_world_enu = q_heading_enu;
 
 				// Extract world ENU yaw (for your controller state)
 				double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
@@ -625,7 +618,6 @@ private:
 	double hover_tolerance_ = 0.3;  // meters
 
 	Eigen::Vector3d origin_pos_enu_{0.0, 0.0, 0.0};
-	Eigen::Quaterniond origin_q_enu_{1.0, 0.0, 0.0, 0.0}; // w,x,y,z
 
 		// --- Odometry noise state ---
 		bool have_prev_odom_{false};
@@ -697,15 +689,14 @@ void UAVOffboardControl::load_trajectory(const std::string &filename)
 			}
 		}
 		if (i == 4) {
-			// Trajectories are authored in the vehicle-local ENU frame.
-			// Convert them once into world ENU so they can be compared
-			// directly against the world-frame ground-truth pose.
+			// Trajectories are spawn-relative ENU offsets (world axes).
+			// Shift them once into world ENU to match the tracked pose.
 			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = origin_q_enu_ * local_pos_enu + origin_pos_enu_;
+			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
 
 			Eigen::Quaterniond q_local_enu(
 				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_local_enu;
+			Eigen::Quaterniond q_world_enu = q_local_enu;
 			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
 
 			trajectory_.push_back({
@@ -790,13 +781,13 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 		// Convert hover target (world ENU) to local NED for PX4
 		Eigen::Vector3d p_world_enu(initial_hover_target_[0], initial_hover_target_[1], initial_hover_target_[2]);
-		Eigen::Vector3d p_local_enu = origin_q_enu_.inverse() * (p_world_enu - origin_pos_enu_);
+		Eigen::Vector3d p_local_enu = (p_world_enu - origin_pos_enu_);
 		Eigen::Vector3d p_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(p_local_enu);
 
 		// Yaw: build world ENU quaternion, move to local ENU, then to PX4(NED)
 		Eigen::Quaterniond q_hover_world_enu(
 			Eigen::AngleAxisd(initial_hover_target_[3], Eigen::Vector3d::UnitZ()));
-		Eigen::Quaterniond q_hover_local_enu = origin_q_enu_.inverse() * q_hover_world_enu;
+		Eigen::Quaterniond q_hover_local_enu = q_hover_world_enu;
 		Eigen::Quaterniond q_hover_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_hover_local_enu);
 		double yaw_ned = px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_hover_ned);
 
@@ -836,10 +827,19 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 		return;
 	}
 
-	// Step 1: Find the closest point in a forward-looking window
-	size_t window_size = 50;
+	// Step 1: Find the closest point in a forward-looking window, limited by
+	// path length (lookahead + 1 m) rather than by point count, so that on a
+	// path that crosses itself (e.g. a recorded flight with repeated loops) the
+	// search can't jump ahead to a later pass that happens to come close.
+	const double search_length = lookahead_distance_ + 1.0;
 	size_t search_start = closest_idx_;
-	size_t search_end = std::min(closest_idx_ + window_size, trajectory_.size() - 1);
+	size_t search_end = search_start + 1;
+	for (double along = 0.0; search_end < trajectory_.size() && along <= search_length; ++search_end) {
+		const double sx = trajectory_[search_end][0] - trajectory_[search_end - 1][0];
+		const double sy = trajectory_[search_end][1] - trajectory_[search_end - 1][1];
+		const double sz = trajectory_[search_end][2] - trajectory_[search_end - 1][2];
+		along += std::sqrt(sx * sx + sy * sy + sz * sz);
+	}
 
 	double min_dist = std::numeric_limits<double>::max();
 	size_t new_closest_idx = closest_idx_;  // start from last known
@@ -857,7 +857,9 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 	size_t start = new_closest_idx;
 	double accum_dist = 0.0;
-	size_t new_target_idx = start;
+	// Aim at the final point when less than the lookahead distance is left,
+	// so the vehicle reaches the end of the path before landing.
+	size_t new_target_idx = trajectory_.size() - 1;
 
 	for (size_t i = start + 1; i < trajectory_.size(); ++i) {
 		double dx = trajectory_[i][0] - trajectory_[i-1][0];
@@ -884,7 +886,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	double dist = std::sqrt(ex*ex + ey*ey + ez*ez);
 
 	// If we're very near the end of the path, trigger LAND (once)
-	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
+	if ((closest_idx_ >= 0.8*trajectory_.size()) && current_target_idx_ == trajectory_.size() - 1 && dist < 0.4) {
 		land();
 		return;
 	}
@@ -899,7 +901,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	// v_world_enu from your controller (vx, vy, vz in world ENU)
 	Eigen::Vector3d v_world_enu(vx, vy, vz);
 	// Transform velocity to local ENU then to local NED
-	Eigen::Vector3d v_local_enu = origin_q_enu_.inverse() * v_world_enu;
+	Eigen::Vector3d v_local_enu = v_world_enu;
 	Eigen::Vector3d v_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(v_local_enu);
 
 	// Yaw to face the target in world ENU
@@ -907,7 +909,7 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 
 	// Convert that yaw to PX4 NED heading
 	Eigen::Quaterniond q_world_enu(Eigen::AngleAxisd(yaw_world_enu, Eigen::Vector3d::UnitZ()));
-	Eigen::Quaterniond q_local_enu = origin_q_enu_.inverse() * q_world_enu;
+	Eigen::Quaterniond q_local_enu = q_world_enu;
 	Eigen::Quaterniond q_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_local_enu);
 	double yaw_ned = px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_ned);
 

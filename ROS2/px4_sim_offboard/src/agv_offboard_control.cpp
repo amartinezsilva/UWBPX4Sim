@@ -186,7 +186,6 @@ private:
     std::mutex pose_mutex_;
 
     Eigen::Vector3d origin_pos_enu_{0.0, 0.0, 0.0};
-	Eigen::Quaterniond origin_q_enu_{1.0, 0.0, 0.0, 0.0}; // w,x,y,z
 
     // Replace/augment your index state with these:
     size_t closest_idx_ = 0;
@@ -285,16 +284,9 @@ AGVOffboardControl::AGVOffboardControl()
 						"agv_origin must have 6 elements [x,y,z,roll,pitch,yaw]; using zeros");
 		} else {
 			origin_pos_enu_ = Eigen::Vector3d(agv_origin_vec[0], agv_origin_vec[1], agv_origin_vec[2]);
-
-			// RPY are given in ENU. Build quaternion qz(yaw)*qy(pitch)*qx(roll).
-			const double roll  = agv_origin_vec[3];
-			const double pitch = agv_origin_vec[4];
-			const double yaw   = agv_origin_vec[5];
-
-			origin_q_enu_ =
-				Eigen::AngleAxisd(yaw,   Eigen::Vector3d::UnitZ()) *
-				Eigen::AngleAxisd(pitch, Eigen::Vector3d::UnitY()) *
-				Eigen::AngleAxisd(roll,  Eigen::Vector3d::UnitX());
+			// PX4's local frame in Gazebo keeps the world axes and only moves its origin
+			// to the spawn point, whatever the spawn yaw. So local <-> world is a pure
+			// translation; the spawn roll/pitch/yaw only set the initial attitude.
 			}
 
 
@@ -577,14 +569,14 @@ AGVOffboardControl::AGVOffboardControl()
                 px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
 
             // Now compose world/map pose
-            Eigen::Vector3d pos_enu_world = origin_q_enu_ * pos_enu_local + origin_pos_enu_;
+            Eigen::Vector3d pos_enu_world = pos_enu_local + origin_pos_enu_;
 
             // Compensate heading resets in NED before converting to ENU.
             const double heading_ned = wrapPi(msg->heading - heading_reset_accum_);
             Eigen::Quaterniond q_heading_ned(Eigen::AngleAxisd(heading_ned, Eigen::Vector3d::UnitZ()));
             Eigen::Quaterniond q_heading_enu =
                 px4_ros_com::frame_transforms::px4_to_ros_orientation(q_heading_ned);
-            Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_heading_enu;
+            Eigen::Quaterniond q_world_enu = q_heading_enu;
 
             // Extract world ENU yaw
             double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
@@ -791,15 +783,14 @@ void AGVOffboardControl::load_trajectory(const std::string &filename)
 			}
 		}
 		if (i == 4) {
-			// Trajectories are authored in the vehicle-local ENU frame.
-			// Convert them once into world ENU so they align with the
-			// world-frame pose tracked by the controller.
+			// Trajectories are spawn-relative ENU offsets (world axes).
+			// Shift them once into world ENU to match the tracked pose.
 			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = origin_q_enu_ * local_pos_enu + origin_pos_enu_;
+			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
 
 			Eigen::Quaterniond q_local_enu(
 				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = origin_q_enu_ * q_local_enu;
+			Eigen::Quaterniond q_world_enu = q_local_enu;
 			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
 
 			trajectory_.push_back({
@@ -927,12 +918,12 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     // --- Convert command to PX4 LOCAL NED ---
     // 1) Velocity: world ENU -> local ENU -> local NED
     Eigen::Vector3d v_world_enu(vx_world_enu, vy_world_enu, vz_world_enu);
-    Eigen::Vector3d v_local_enu = origin_q_enu_.inverse() * v_world_enu;
+    Eigen::Vector3d v_local_enu = v_world_enu;
     Eigen::Vector3d v_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(v_local_enu);
 
     // 2) Yaw: world ENU -> local ENU -> PX4(NED) heading
     Eigen::Quaterniond q_world_enu(Eigen::AngleAxisd(yaw_world_enu, Eigen::Vector3d::UnitZ()));
-    Eigen::Quaterniond q_local_enu = origin_q_enu_.inverse() * q_world_enu;
+    Eigen::Quaterniond q_local_enu = q_world_enu;
     Eigen::Quaterniond q_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_local_enu);
     const double yaw_ned =
         px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_ned);

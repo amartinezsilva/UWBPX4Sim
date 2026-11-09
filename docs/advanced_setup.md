@@ -402,7 +402,7 @@ make px4_sitl
 
 ### How to spawn the robots?
 
-`spawn_pose` tells Gazebo where to spawn the robot and defines the world-frame origin of that robot’s local trajectory file
+`spawn_pose` tells Gazebo where to spawn the robot. Its position is also the origin of that robot's trajectory file: trajectory points are offsets from the spawn position, along the world axes.
 
 For example, if a UAV uses:
 
@@ -416,7 +416,7 @@ and the first trajectory CSV point is:
 x=0.5, y=-0.5, z=2.0
 ```
 
-then the offboard node interprets that trajectory point in the robot-local ENU frame and transforms it into the world frame using that `spawn_pose`.
+then the robot flies to world point `(3.5, -0.5, 2.0)`. The spawn roll, pitch and yaw only set the initial attitude and don't rotate the trajectory, because PX4's local frame keeps the world axes.
 
 ## ROS 2 workspace
 

@@ -249,7 +249,7 @@ Flights reproduce UTIL's paths with a median tracking error of 3-7 cm, with the 
 - **Moving tags have outliers that static ones don't** (1-10 % of flight samples more than 30 cm from the pair's median). The moving-outlier term captures them: W1 raw drops from 5.20 to 3.07 cm.
 - **Some anchors are noisier, and offsets are larger in flight** (about 4.5 cm against 2.1 cm simulated). Both depend on the installation and aren't modelled (see [Sim-to-real gap](#sim-to-real-gap)).
 
-**NLOS**, with one metal and three wooden boxes (Figure 4):
+**NLOS**, with one metal and three wooden boxes (Figure 4). The layout [`config/demo_util_nlos.yaml`](../config/demo_util_nlos.yaml) reproduces one of these flights as a ready-made demo:
 
 | Link | Robust std, real / sim | Outliers, real / sim |
 | --- | --- | --- |
