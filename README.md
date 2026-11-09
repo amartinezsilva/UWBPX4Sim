@@ -52,7 +52,16 @@ The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it c
 3. **Open a shell**: skip the menu and get a plain shell in the container.
 4. **Exit**: stops the container, and asks whether to remove it completely instead (default just stops it) -- everything else, including closing your terminal, leaves it running with your configuration intact. Run `./setup.sh` again any time to get back to this same menu.
 
-![The setup GUI: a layout with one UAV, one UGV and four static anchors](images/gui_setup.png)
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/gui_settings.gif" alt="The setup GUI: loading a demo layout, editing its robots and transceivers, and browsing the plugin parameters"></td>
+    <td width="50%"><img src="docs/images/gui_setup_build.gif" alt="The setup GUI: loading demo_util_nlos, selecting the lps_tdoa preset and running setup with the PX4 build until it finishes"></td>
+  </tr>
+  <tr>
+    <td><em>Building a layout and tuning the plugin parameters (3x speed).</em></td>
+    <td><em>Loading <code>demo_util_nlos</code>, selecting the <code>lps_tdoa</code> preset and running setup with the PX4 build (sped up).</em></td>
+  </tr>
+</table>
 
 `docker-compose.yml` bind-mounts the whole repository (plus `ROS2/px4_sim_offboard/trajectories/` onto its installed path) from the host into the container, so editing a layout, a plugin-parameter preset, a custom world, a trajectory CSV, or the plugin source on the host takes effect the next time setup (or the simulation) runs -- no image rebuild needed.
 
