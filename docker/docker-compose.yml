@@ -4,9 +4,9 @@
 # tells you about any existing image, checks disk space -- see setup.sh --help).
 #
 # This is UWBPX4Sim's own, simulation-only image. mr-radio-localization's
-# docker/ builds FROM this one and adds its own localization dependencies
-# on top -- its setup.sh builds this image first automatically if it's
-# missing, so you normally don't need to touch this docker/ directly unless
+# SITL image (docker/Dockerfile.sim there) builds FROM this one and adds its
+# own localization dependencies on top -- its `setup.sh --sim` builds this
+# image first automatically if it's missing, so you normally don't need to touch this docker/ directly unless
 # you just want the simulator standalone.
 #
 # Usage (from this docker/ directory, Linux host with an X server):

@@ -87,7 +87,7 @@ export GZ_WORLD=<your-world-name>
 
 `simulator_launcher.sh` also makes the following assumptions:
 
-- the ROS 2 workspace directory is either at `<path_to_UWBPX4Sim>/../..` (when using UWBPX4Sim as standalone) or `<path_to_UWBPX4Sim>/../../..` (when using UWBPX4Sim as a submodule of `mr-radio-localization`)
+- the ROS 2 workspace directory is at `<path_to_UWBPX4Sim>/../..`, i.e. this repository is cloned directly under `<ros_ws>/src/`. That's also where it goes when used together with [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization): both repositories side by side under the same `src/`. (`<path_to_UWBPX4Sim>/../../..` is also tried, for older checkouts that had UWBPX4Sim nested inside mr-radio-localization.)
 - PX4 lives at `~/PX4-Autopilot`
 
 If your setup differs, override the paths before launching:
@@ -111,6 +111,29 @@ No ground station is needed: the offboard nodes arm and fly the vehicles, and th
 | --- | --- |
 | `--headless` | Run Gazebo without its GUI, and don't open RViz |
 | `--detach` | Don't attach to the tmux session; stop it with `tmux kill-session -t <session>` |
+
+### Troubleshooting
+
+#### The Micro XRCE-DDS Agent doesn't connect to PX4 (Ubuntu 24.04 / ROS 2 Jazzy)
+
+On Ubuntu 24.04 with ROS 2 Jazzy, there is a [previously reported issue](https://discuss.px4.io/t/dds-faild-to-connect-ros2-jazzy/47966/3) that prevents the Micro XRCE-DDS Agent from connecting to the PX4 topics, so the PX4 topics never show up in ROS 2. Building the Agent from source also builds its own copies of the FastDDS/FastCDR libraries, and these can conflict with the versions that ROS 2 Jazzy installs under `/opt/ros`.
+
+The most straightforward workaround is to make your shell look in the Agent's build folders before the ROS ones, by putting them at the beginning of `LD_LIBRARY_PATH`. First, find where those libraries are (replace `<path>` with the directory where you cloned Micro-XRCE-DDS-Agent):
+
+```bash
+find <path>/Micro-XRCE-DDS-Agent/build -name "libfastrtps.so*" | grep temp_install
+find <path>/Micro-XRCE-DDS-Agent/build -name "libfastcdr.so*" | grep temp_install
+```
+
+Note the directories that contain these files (they usually end in `/lib`). Then add a line like this to your `.bashrc` or `.zshrc`, using the paths you found:
+
+```bash
+export LD_LIBRARY_PATH=/home/YOUR_USER/Micro-XRCE-DDS-Agent/build/temp_install/fastrtps-2.14/lib:/home/YOUR_USER/Micro-XRCE-DDS-Agent/build/temp_install/fastcdr-2.2.0/lib:$LD_LIBRARY_PATH
+```
+
+Open a new terminal (or `source` the file) to apply it. The Agent should then connect and the PX4 topics appear in ROS 2.
+
+The Docker image doesn't have this problem, so it's the easiest way to avoid it entirely (see [Getting started](../README.md#getting-started)).
 
 ## Layout files
 

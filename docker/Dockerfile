@@ -1,8 +1,9 @@
 # Standalone image for the UWBPX4Sim simulator: PX4 SITL, Gazebo Harmonic,
 # and the UWB Gazebo plugin/ROS 2 offboard bridge, with nothing
-# localization-specific. mr-radio-localization's own docker/Dockerfile
-# builds FROM this image and adds only its radar/localization dependencies
-# on top -- see that Dockerfile's comments for why.
+# localization-specific. mr-radio-localization's SITL image (its
+# docker/Dockerfile.sim) builds FROM this image and adds only its
+# radar/localization dependencies on top -- see that Dockerfile's comments
+# for why.
 FROM osrf/ros:jazzy-desktop-full
 
 # python3-flask backs the setup GUI (gui/app.py)

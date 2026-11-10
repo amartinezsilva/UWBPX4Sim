@@ -3,8 +3,8 @@
 # entrypoint-lib.sh - Function library for UWBPX4Sim's guided container
 # entrypoint. Sourced by entrypoint.sh (a thin wrapper that just calls
 # uwbpx4sim_main "$@" after sourcing this), and also meant to be sourced by
-# a *derived* image's own entrypoint.sh (mr-radio-localization's, for
-# instance) that wants the same menu/setup/demo/exit machinery plus its
+# a *derived* image's own entrypoint (mr-radio-localization's
+# entrypoint-sim.sh, for instance) that wants the same menu/setup/demo/exit machinery plus its
 # own extra options -- it does that by sourcing this file, redefining
 # print_menu/run_menu (bash resolves function calls by name at call time,
 # so uwbpx4sim_main's internal `run_menu` call below will invoke whichever

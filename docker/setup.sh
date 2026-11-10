@@ -11,8 +11,8 @@
 # to be copy-pasted.
 #
 # This is UWBPX4Sim's own, simulation-only image. mr-radio-localization's
-# docker/setup.sh builds FROM it and calls this script itself (with
-# --no-run -y) to build it first if it's missing -- you normally don't
+# SITL image builds FROM it, and that repo's `docker/setup.sh --sim` calls
+# this script itself (with --no-run -y) to build it first if it's missing -- you normally don't
 # need to run this directly unless you just want the simulator standalone.
 #
 # The container it starts is persistent, not throwaway: it runs detached

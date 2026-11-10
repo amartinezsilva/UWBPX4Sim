@@ -65,7 +65,7 @@ The first build compiles the PX4 toolchain and the full ROS 2 workspace, so it c
 
 `docker-compose.yml` bind-mounts the whole repository (plus `ROS2/px4_sim_offboard/trajectories/` onto its installed path) from the host into the container, so editing a layout, a plugin-parameter preset, a custom world, a trajectory CSV, or the plugin source on the host takes effect the next time setup (or the simulation) runs -- no image rebuild needed.
 
-This image is also the base that [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization)'s own Docker image builds `FROM`, adding its radar/localization stack on top -- see that repo's `docker/` for the layered setup.
+This image is also the base of [mr-radio-localization](https://github.com/amartinezsilva/mr-radio-localization)'s SITL Docker image (`./setup.sh --sim` in that repo's `docker/`), which builds `FROM` it and adds the radar/localization stack on top, building this image first if it's missing. mr-radio-localization also has a standalone image that runs the localization on recorded bags without this simulator.
 
 To run without Docker, see [Running without Docker](docs/advanced_setup.md#running-without-docker).
 
