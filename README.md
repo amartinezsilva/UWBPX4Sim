@@ -30,7 +30,7 @@ Each preset is calibrated from a real UWB dataset (details and validation in [Me
 
 Pfeiffer et al.'s TDoA flights [3] were also used to test the Loco Positioning TDOA preset on a second installation.
 
-1. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", 2025. [Paper](https://arxiv.org/abs/2509.26558), [data](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/KNKWMJ).
+1. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", *IEEE ICRA*, 2026, pp. 17557–17564. [Paper](https://doi.org/10.1109/ICRA57385.2026.11696767), [preprint](https://arxiv.org/abs/2509.26558), [data](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/KNKWMJ).
 2. W. Zhao, A. Goudar, X. Qiao, A. P. Schoellig, "UTIL: An Ultra-wideband Time-difference-of-arrival Indoor Localization Dataset", *IJRR*, 2024. [Paper](https://arxiv.org/abs/2203.14471), [data](https://github.com/utiasDSL/util-uwb-dataset).
 3. S. Pfeiffer, C. de Wagter, G. C. H. E. de Croon, "A Computationally Efficient Moving Horizon Estimator for Ultra-Wideband Localization on Small Quadrotors", *IEEE RA-L*, 2021. [Paper](https://doi.org/10.1109/LRA.2021.3095519), [data](https://doi.org/10.4121/14827680).
 
@@ -155,3 +155,21 @@ The Gazebo plugin also works without PX4 or ROS 2, in your own Gazebo Harmonic w
 - [UWB basics](docs/uwb_basics.md): a short introduction to UWB ranging, TWR and TDoA, and common setups, for readers new to UWB.
 - [Measurement model](docs/measurement_model.md): equations, materials, all plugin parameters and calibration results.
 - [Advanced setup](docs/advanced_setup.md): running without Docker, full layout reference, adding vehicle types, manual installation and ROS 2 interfaces.
+
+## Cite this work
+
+UWBPX4Sim is the simulation environment of the following work. If you use it in your research, please cite:
+
+> A. Martínez-Silva, D. Alejo, L. Merino and F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization," *2026 IEEE International Conference on Robotics and Automation (ICRA)*, Vienna, Austria, 2026, pp. 17557–17564, doi: [10.1109/ICRA57385.2026.11696767](https://doi.org/10.1109/ICRA57385.2026.11696767).
+
+```bibtex
+@inproceedings{martinezsilva2026radio,
+  author    = {Mart{\'i}nez-Silva, Andr{\'e}s and Alejo, David and Merino, Luis and Caballero, Fernando},
+  title     = {Radio-based Multi-Robot Odometry and Relative Localization},
+  booktitle = {2026 IEEE International Conference on Robotics and Automation (ICRA)},
+  address   = {Vienna, Austria},
+  year      = {2026},
+  pages     = {17557--17564},
+  doi       = {10.1109/ICRA57385.2026.11696767}
+}
+```

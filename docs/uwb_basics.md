@@ -80,5 +80,5 @@ The simulator supports both, and mixes of them: any robot can carry tags, anchor
 11. Decawave, *APS011 Application Note: Sources of Error in DW1000 Based Two-Way Ranging (TWR) Schemes* (two-way ranging with clock drift; double-sided TWR). https://www.qorvo.com/products/d/da008446
 12. Bitcraze, *TDoA principles*, lps-node-firmware documentation. https://www.bitcraze.io/documentation/repository/lps-node-firmware/master/functional-areas/tdoa_principles/
 13. A. Acton, V. Kulkarni (ARIN Technologies), "Scalable, Low-Cost Indoor Localization System using TDoA and UWB", Microsoft Indoor Localization Competition. https://www.microsoft.com/en-us/research/wp-content/uploads/2016/11/ARINTech_Acton.pdf
-14. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", 2025. https://arxiv.org/abs/2509.26558
+14. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", *IEEE ICRA*, 2026, pp. 17557–17564. https://doi.org/10.1109/ICRA57385.2026.11696767
 15. Eliko, *UWB RTLS: Ultra-Wideband Real-Time Location System* (comparison of AP-TWR, TWR and TDoA; vendor claims). https://eliko.tech/uwb-rtls-ultra-wideband-real-time-location-system/
