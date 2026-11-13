@@ -3,6 +3,7 @@
 #include <px4_msgs/msg/vehicle_command.hpp>
 #include <px4_msgs/msg/vehicle_odometry.hpp>
 #include <px4_msgs/msg/vehicle_local_position.hpp>
+#include <px4_msgs/msg/vehicle_status.hpp>
 
 #include <px4_ros_com/frame_transforms.h>
 
@@ -52,6 +53,15 @@ static inline double wrapPi(double a) {
     while (a >  M_PI) a -= 2.0*M_PI;
     while (a < -M_PI) a += 2.0*M_PI;
     return a;
+}
+
+// Yaw, pitch, roll (ZYX) of a rotation matrix, yaw in (-pi, pi]. Not Eigen's
+// eulerAngles(2, 1, 0): it returns the first angle in [0, pi], so a negative yaw
+// comes back as yaw + pi (with roll and pitch flipped by pi to compensate).
+static inline Eigen::Vector3d yawPitchRoll(const Eigen::Matrix3d &R) {
+    return Eigen::Vector3d(std::atan2(R(1, 0), R(0, 0)),
+                           std::asin(std::clamp(-R(2, 0), -1.0, 1.0)),
+                           std::atan2(R(2, 1), R(2, 2)));
 }
 
 static std::vector<std::string> sensorKeysFromIds(
@@ -127,7 +137,7 @@ private:
 
 	static inline double yaw_from_quat_enu(const Eigen::Quaterniond &q)
 	{
-		Eigen::Vector3d eul = q.toRotationMatrix().eulerAngles(2, 1, 0);
+		Eigen::Vector3d eul = yawPitchRoll(q.toRotationMatrix());
 		return eul[0];
 	}
 
@@ -176,6 +186,12 @@ private:
     // scale biases (percent -> unitless scale)
     double pos_scale_err_{0.0};  // = odom_error_position_ / 100.0
     double yaw_scale_err_{0.0};  // = odom_error_angle_   / 100.0
+    double pos_bias_{0.0};  // per-run translation scale error (+-pos_scale_err_)
+    double yaw_bias_{0.0};  // per-run heading scale error (+-yaw_scale_err_)
+    double pos_noise_density_{0.0};  // odom_noise_position: m per sqrt(m) of distance
+    double yaw_noise_density_{0.0};  // odom_noise_angle, in rad per sqrt(rad) turned
+    double gyro_bias_{0.0};          // odom_gyro_bias, rad/s (per-run sign)
+    uint64_t last_odom_stamp_us_{0};
 
     // Add near other private members:
     std::mt19937 rng_;
@@ -210,6 +226,9 @@ private:
 
     rclcpp::Subscription<VehicleOdometry>::SharedPtr vehicle_odometry_subscriber_;
 	rclcpp::Subscription<px4_msgs::msg::VehicleLocalPosition>::SharedPtr vehicle_local_position_subscriber_;
+	rclcpp::Subscription<px4_msgs::msg::VehicleStatus>::SharedPtr vehicle_status_subscriber_;
+	bool have_status_ = false;  // a vehicle_status message has been received
+	bool engaged_ = false;      // PX4 has reported armed + offboard (latched)
 
 
     std::unordered_map<std::string, double> uwb_distances_;
@@ -251,6 +270,16 @@ AGVOffboardControl::AGVOffboardControl()
     this->get_parameter("offboard_control_mode_topic", offboard_control_mode_topic_);
     this->get_parameter("trajectory_setpoint_topic", trajectory_setpoint_topic_);
     this->get_parameter("vehicle_command_topic", vehicle_command_topic_);
+    // Derived from the command topic unless set (generated configs don't set it).
+    std::string vehicle_status_topic = vehicle_command_topic_;
+    {
+        const std::string cmd_suffix = "/in/vehicle_command";
+        if (vehicle_status_topic.size() >= cmd_suffix.size() &&
+            vehicle_status_topic.compare(vehicle_status_topic.size() - cmd_suffix.size(), cmd_suffix.size(), cmd_suffix) == 0) {
+            vehicle_status_topic.replace(vehicle_status_topic.size() - cmd_suffix.size(), cmd_suffix.size(), "/out/vehicle_status_v1");
+        }
+    }
+    this->get_parameter("vehicle_status_topic", vehicle_status_topic);
     this->get_parameter("vehicle_odometry_topic", vehicle_odometry_topic_);
     this->get_parameter("vehicle_local_position_topic", vehicle_local_position_topic_);
     this->get_parameter("trajectory_csv_file", traj_file_);
@@ -272,6 +301,28 @@ AGVOffboardControl::AGVOffboardControl()
 
     // Seed RNG for Gaussian noise
     rng_ = std::mt19937(std::random_device{}());
+
+    // Odometry error model, drawn once per run (random signs):
+    //  - scale errors of +-odom_error_position % on every translation step and
+    //    +-odom_error_angle % on every heading step (miscalibrated wheels / gyro scale);
+    //  - random walks: odom_noise_position m per sqrt(m) travelled, odom_noise_angle deg
+    //    per sqrt(deg) turned (slip), so their variance grows with distance / angle;
+    //  - a gyro bias of +-odom_gyro_bias deg/s, a heading drift that grows with time.
+    {
+        std::bernoulli_distribution coin(0.5);
+        pos_bias_ = (coin(rng_) ? 1.0 : -1.0) * pos_scale_err_;
+        yaw_bias_ = (coin(rng_) ? 1.0 : -1.0) * yaw_scale_err_;
+        double noise_position = 0.0, noise_angle_deg = 0.0, gyro_bias_deg_s = 0.0;
+        this->get_parameter("odom_noise_position", noise_position);
+        this->get_parameter("odom_noise_angle", noise_angle_deg);
+        this->get_parameter("odom_gyro_bias", gyro_bias_deg_s);
+        pos_noise_density_ = noise_position;
+        // deg per sqrt(deg) -> rad per sqrt(rad)
+        yaw_noise_density_ = noise_angle_deg * std::sqrt(M_PI / 180.0);
+        gyro_bias_ = (coin(rng_) ? 1.0 : -1.0) * gyro_bias_deg_s * M_PI / 180.0;
+        RCLCPP_INFO(this->get_logger(), "Odometry drift: translation scale %+.2f %%, heading scale %+.2f %%, position random walk %.3f m/sqrt(m), heading random walk %.2f deg/sqrt(deg), gyro bias %+.4f deg/s.",
+                    100.0 * pos_bias_, 100.0 * yaw_bias_, pos_noise_density_, noise_angle_deg, gyro_bias_ * 180.0 / M_PI);
+    }
 
     this->get_parameter("lookahead_distance", lookahead_distance_);
     this->get_parameter("cruise_speed", cruise_speed_);
@@ -386,7 +437,7 @@ AGVOffboardControl::AGVOffboardControl()
         Eigen::Vector3d pos_enu = px4_ros_com::frame_transforms::ned_to_enu_local_frame(pos_ned);
 
         Eigen::Quaterniond q_ned_raw(msg->q[0], msg->q[1], msg->q[2], msg->q[3]);
-        const Eigen::Vector3d rpy_ned_raw = q_ned_raw.toRotationMatrix().eulerAngles(2, 1, 0);
+        const Eigen::Vector3d rpy_ned_raw = yawPitchRoll(q_ned_raw.toRotationMatrix());
         const double yaw_ned_cont = wrapPi(rpy_ned_raw[0] - heading_reset_accum_);
         Eigen::Quaterniond q_ned =
             Eigen::AngleAxisd(yaw_ned_cont, Eigen::Vector3d::UnitZ()) *
@@ -395,10 +446,15 @@ AGVOffboardControl::AGVOffboardControl()
         Eigen::Quaterniond q_enu = px4_ros_com::frame_transforms::px4_to_ros_orientation(q_ned);
 
         // True ENU yaw from quaternion
-        const Eigen::Vector3d rpy_true = q_enu.toRotationMatrix().eulerAngles(2, 1, 0); // ZYX
+        const Eigen::Vector3d rpy_true = yawPitchRoll(q_enu.toRotationMatrix()); // ZYX
         const double yaw_true = rpy_true[0];
         const double pitch_true = rpy_true[1];
         const double roll_true  = rpy_true[2];
+
+        // Time since the previous sample (PX4 timestamps, us), for the gyro bias.
+        const double dt_odom = (last_odom_stamp_us_ > 0 && msg->timestamp > last_odom_stamp_us_)
+            ? static_cast<double>(msg->timestamp - last_odom_stamp_us_) * 1e-6 : 0.0;
+        last_odom_stamp_us_ = msg->timestamp;
 
         if (last_odom_reset_counter_ < 0) {
             last_odom_reset_counter_ = msg->reset_counter;
@@ -429,19 +485,18 @@ AGVOffboardControl::AGVOffboardControl()
             Eigen::Matrix3d R_last_true_enu = q_last_true_enu_.toRotationMatrix();
             Eigen::Vector3d dpos_true_body = R_last_true_enu.transpose() * dpos_true_enu;
 
-            // 3) Add body-frame noise / scale (your per-axis % is fine here)
-            Eigen::Vector3d sigma_body(
-                pos_scale_err_ * std::abs(dpos_true_body.x()),
-                pos_scale_err_ * std::abs(dpos_true_body.y()),
-                pos_scale_err_ * std::abs(dpos_true_body.z()));
-            Eigen::Vector3d dpos_noisy_body = dpos_true_body + Eigen::Vector3d(
-                sigma_body.x() * odom_noise_(rng_),
-                sigma_body.y() * odom_noise_(rng_),
-                sigma_body.z() * odom_noise_(rng_));
+            // Per-run scale error, plus a random walk whose variance grows with the distance
+            // travelled (independent of the update rate: sigma per step = k * sqrt(step)).
+            const double sigma_step = pos_noise_density_ * std::sqrt(dpos_true_body.norm());
+            Eigen::Vector3d dpos_noisy_body = dpos_true_body * (1.0 + pos_bias_) + sigma_step * Eigen::Vector3d(
+                odom_noise_(rng_), odom_noise_(rng_), odom_noise_(rng_));
 
-            // Yaw increment (still Z-only if you want): 
+            // Heading: per-run scale error (gyro scale factor), random walk with the angle turned
+            // (slip), and gyro bias integrated over time.
             double dyaw_true = wrapPi(yaw_true - last_yaw_true_);
-            double dyaw_noisy = dyaw_true + (yaw_scale_err_ * std::abs(dyaw_true)) * odom_noise_(rng_);
+            double dyaw_noisy = dyaw_true * (1.0 + yaw_bias_)
+                                + yaw_noise_density_ * std::sqrt(std::abs(dyaw_true)) * odom_noise_(rng_)
+                                + gyro_bias_ * dt_odom;
 
             // 4) Update the *estimated* orientation first
             yaw_noisy_ = wrapPi(yaw_noisy_ + dyaw_noisy);
@@ -530,6 +585,18 @@ AGVOffboardControl::AGVOffboardControl()
 
         ros_odometry_publisher_->publish(odom_msg);
     });
+
+    vehicle_status_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleStatus>(
+        vehicle_status_topic, rclcpp::SensorDataQoS(),
+        [this](const px4_msgs::msg::VehicleStatus::SharedPtr msg) {
+            have_status_ = true;
+            if (!engaged_ &&
+                msg->arming_state == px4_msgs::msg::VehicleStatus::ARMING_STATE_ARMED &&
+                msg->nav_state == px4_msgs::msg::VehicleStatus::NAVIGATION_STATE_OFFBOARD) {
+                engaged_ = true;
+                RCLCPP_INFO(this->get_logger(), "Armed in offboard mode.");
+            }
+        });
 
     vehicle_local_position_subscriber_ = this->create_subscription<px4_msgs::msg::VehicleLocalPosition>(
         vehicle_local_position_topic_, rclcpp::SensorDataQoS(),
@@ -731,16 +798,25 @@ void AGVOffboardControl::timer_callback()
 
     if (stationary_) return;
 
-    if (++offboard_counter_ == 10) {
+    // Offboard mode + arm after 10 setpoints. Commands sent before the DDS link to PX4
+    // has matched are dropped, so while vehicle_status doesn't confirm armed + offboard,
+    // resend every second (never once the rover has finished). Without vehicle_status,
+    // send once.
+    const auto now = this->get_clock()->now();
+    ++offboard_counter_;
+    const bool retry = have_status_ && !engaged_ && !finished_ &&
+                       offboard_counter_ > 10 && (now - start_time_).seconds() >= 1.0;
+    if (offboard_counter_ == 10 || retry) {
+        if (retry) {
+            RCLCPP_WARN(this->get_logger(), "Arm/offboard not confirmed by PX4 yet, resending.");
+        }
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_DO_SET_MODE, 1, 6);
         publish_vehicle_command(VehicleCommand::VEHICLE_CMD_COMPONENT_ARM_DISARM, 1);
-        
-        start_time_ = this->get_clock()->now();
+        start_time_ = now;
     }
 
-    if (!started_ && offboard_counter_ > 10){
-        //Wait a bit for the drone to take off
-        auto now = this->get_clock()->now();
+    if (!started_ && offboard_counter_ > 10 && (engaged_ || !have_status_)) {
+        // Give the rover a moment after arming.
         if ((now - start_time_).seconds() >= 5.0) {
             started_ = true;
         }

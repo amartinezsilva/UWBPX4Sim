@@ -319,8 +319,11 @@ These keys are accepted for both UAVs and UGVs.
 | `trajectory_csv_file` | CSV trajectory file name under `ROS2/px4_sim_offboard/trajectories/`. The controller loads this path and tracks it. | `trajectory_lemniscate_uav.csv` for UAVs, `trajectory_lemniscate_agv.csv` for UGVs |
 | `lookahead_distance` | Lookahead distance in meters used to pick a future target point on the trajectory. | `2.0` |
 | `cruise_speed` | Nominal tracking speed in m/s used by the offboard controller. | `0.5` for UAVs, `0.52` for UGVs |
-| `odom_error_position` | Synthetic odometry drift percentage applied to translational motion. `1.0` means about 1 m drift per 100 m traveled. | `0.0` |
-| `odom_error_angle` | Synthetic odometry drift percentage applied to heading increments. | `0.0` |
+| `odom_error_position` | Systematic odometry drift, in percent of the distance travelled. Each run draws a scale error of plus or minus this percentage (random sign) and applies it to every translation step, like a miscalibrated wheel encoder: `1.0` means about 1 m of error per 100 m travelled. The node logs every drawn value at startup. | `0.0` |
+| `odom_error_angle` | Systematic heading drift, in percent of the net rotation: a per-run scale error of plus or minus this percentage on every heading step, like a gyro scale factor. `1.0` means about 1° per 100° of net turning; turns in opposite directions cancel. | `0.0` |
+| `odom_noise_position` | Position random walk, in m per √m travelled: every step gets Gaussian noise with a standard deviation of this value times the square root of the step length, so the error grows with the square root of the distance whatever the update rate. `0.03` gives about 0.3 m (1σ, per axis) after 100 m. | `0.0` |
+| `odom_noise_angle` | Heading random walk, in degrees per √degree turned (wheel slip while turning). `0.3` gives about 3° after 100° of turning. | `0.0` |
+| `odom_gyro_bias` | Gyro bias, in °/s (random sign per run): a heading drift that grows with time, also while the robot stands still. | `0.0` |
 | `enabled` | `false` spawns the vehicle without an offboard node: PX4 is never armed. A UGV whose trajectory doesn't move (e.g. `trajectory_los_agv.csv`) is also never armed, but keeps its node, so it still publishes its pose and UWB topics. A UGV stops and disarms at the end of its path. | `true` |
 | `ros_odometry_topic` | ROS topic where the node publishes noisy odometry. | `/<frame_prefix>/odom` |
 | `ros_gt_topic` | ROS topic where the node publishes ground-truth pose. | `/<frame_prefix>/gt` |

@@ -973,6 +973,9 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
             "cruise_speed": 0.5,
             "odom_error_position": 0.0,
             "odom_error_angle": 0.0,
+            "odom_noise_position": 0.0,
+            "odom_noise_angle": 0.0,
+            "odom_gyro_bias": 0.0,
             "ros_odometry_topic": f"/{frame_prefix}/odom",
             "ros_gt_topic": f"/{frame_prefix}/gt",
             "frame_prefix": frame_prefix,
@@ -986,6 +989,9 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
         "cruise_speed": 0.52,
         "odom_error_position": 0.0,
         "odom_error_angle": 0.0,
+        "odom_noise_position": 0.0,
+        "odom_noise_angle": 0.0,
+        "odom_gyro_bias": 0.0,
         "ros_odometry_topic": f"/{frame_prefix}/odom",
         "ros_gt_topic": f"/{frame_prefix}/gt",
         "frame_prefix": frame_prefix,
@@ -1005,7 +1011,8 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
 # far enough to open the CSV). Coerced below regardless of where the value
 # came from, so this is fixed for existing layout files too, not just new
 # GUI saves.
-_FLOAT_OFFBOARD_KEYS = ("lookahead_distance", "cruise_speed", "odom_error_position", "odom_error_angle")
+_FLOAT_OFFBOARD_KEYS = ("lookahead_distance", "cruise_speed", "odom_error_position", "odom_error_angle",
+                        "odom_noise_position", "odom_noise_angle", "odom_gyro_bias")
 
 
 def resolve_offboard_params(
@@ -1059,6 +1066,9 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "cruise_speed": params["cruise_speed"],
         "odom_error_position": params["odom_error_position"],
         "odom_error_angle": params["odom_error_angle"],
+        "odom_noise_position": params["odom_noise_position"],
+        "odom_noise_angle": params["odom_noise_angle"],
+        "odom_gyro_bias": params["odom_gyro_bias"],
         "uav_origin": _flow_vector([pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw]),
         "vehicle_target_system": assignment.target_system,
         "frame_prefix": params["frame_prefix"],
@@ -1089,6 +1099,9 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "cruise_speed": params["cruise_speed"],
         "odom_error_position": params["odom_error_position"],
         "odom_error_angle": params["odom_error_angle"],
+        "odom_noise_position": params["odom_noise_position"],
+        "odom_noise_angle": params["odom_noise_angle"],
+        "odom_gyro_bias": params["odom_gyro_bias"],
         "agv_origin": _flow_vector([pose.x, pose.y, pose.z, pose.roll, pose.pitch, pose.yaw]),
         "vehicle_target_system": assignment.target_system,
         "frame_prefix": params["frame_prefix"],
