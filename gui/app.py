@@ -50,6 +50,9 @@ DEFAULT_UAV_OFFBOARD = {
     "cruise_speed": 0.5,
     "odom_error_position": 0.0,
     "odom_error_angle": 0.0,
+    "odom_noise_position": 0.0,
+    "odom_noise_angle": 0.0,
+    "odom_gyro_bias": 0.0,
 }
 
 DEFAULT_UGV_OFFBOARD = {
@@ -58,6 +61,9 @@ DEFAULT_UGV_OFFBOARD = {
     "cruise_speed": 0.52,
     "odom_error_position": 0.0,
     "odom_error_angle": 0.0,
+    "odom_noise_position": 0.0,
+    "odom_noise_angle": 0.0,
+    "odom_gyro_bias": 0.0,
 }
 
 

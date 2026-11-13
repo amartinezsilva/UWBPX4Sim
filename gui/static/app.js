@@ -8,6 +8,9 @@ const DEFAULT_UAV_OFFBOARD = {
   cruise_speed: 0.5,
   odom_error_position: 0.0,
   odom_error_angle: 0.0,
+  odom_noise_position: 0.0,
+  odom_noise_angle: 0.0,
+  odom_gyro_bias: 0.0,
 };
 const DEFAULT_UGV_OFFBOARD = {
   trajectory_csv_file: "trajectory_lemniscate_agv.csv",
@@ -15,6 +18,9 @@ const DEFAULT_UGV_OFFBOARD = {
   cruise_speed: 0.52,
   odom_error_position: 0.0,
   odom_error_angle: 0.0,
+  odom_noise_position: 0.0,
+  odom_noise_angle: 0.0,
+  odom_gyro_bias: 0.0,
 };
 
 // type -> {min, max, step} for sliders; 'text'/'bool'/'number' for the rest.
@@ -202,6 +208,9 @@ function renderOffboardFields(vehicle) {
     ["cruise_speed", 0.01],
     ["odom_error_position", 0.1],
     ["odom_error_angle", 0.1],
+    ["odom_noise_position", 0.01],
+    ["odom_noise_angle", 0.05],
+    ["odom_gyro_bias", 0.001],
   ].forEach(([field, step]) => {
     const inp = el("input", { type: "number", step: String(step) });
     inp.value = ob[field];
