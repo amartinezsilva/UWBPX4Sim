@@ -155,13 +155,10 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
     # (group label, [(key, default)]) -- defines both the canonical write
     # order/section comments for a rendered preset file and the ordered
     # param list the frontend renders. Keep in sync with the "Parameter
-    # reference" table in README.md if either changes. Per-material
-    # material_<name>_attenuation_db_per_m / _permittivity overrides are
-    # deliberately not listed: every listed key is written into a saved
-    # preset, which would freeze the rates the plugin otherwise derives from
-    # carrier_frequency_ghz. Add them to a preset by hand when needed; the
-    # same goes for custom materials (material_<name>_loss_tangent etc., see
-    # docs/measurement_model.md#custom-materials).
+    # reference" table in README.md if either changes. Custom materials
+    # (material_<name>_permittivity / _loss_tangent, see
+    # docs/measurement_model.md#custom-materials) aren't listed, since their
+    # names vary; add them to a preset by hand.
     PARAM_GROUPS: list[tuple[str, list[tuple[str, Any]]]] = [
         ("Ranging mode and topics.", [
             ("uwb_mode", "twr"),
@@ -233,8 +230,8 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
             for key, default in kv:
                 lines.append(f"{key}: {fmt(values.get(key, default))}")
             lines.append("")
-        # Keys the GUI doesn't render (e.g. hand-added material_<name>_*
-        # overrides) are kept as-is rather than dropped on save.
+        # Keys the GUI doesn't render (e.g. a custom material's hand-added
+        # material_<name>_* keys) are kept as-is rather than dropped on save.
         extra = [k for k in values if k not in PARAM_DEFAULTS]
         if extra:
             lines.append("# Other parameters (not editable in the GUI).")

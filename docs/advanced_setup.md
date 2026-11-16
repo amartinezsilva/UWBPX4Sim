@@ -404,8 +404,9 @@ The parameter values inside the block come from the selected preset under `uwb_g
   <carrier_frequency_ghz>4.0</carrier_frequency_ghz>
   <material_metal_detour_loss_db>20.0</material_metal_detour_loss_db>
   <enable_dielectric_delay>false</enable_dielectric_delay>
-  <!-- Optional per-material overrides (defaults: see "Material table"), e.g.: -->
-  <!-- <material_concrete_attenuation_db_per_m>97.7</material_concrete_attenuation_db_per_m> -->
+  <!-- Optional custom materials (see "Custom materials" in the measurement model), e.g.: -->
+  <!-- <material_brick_permittivity>4.0</material_brick_permittivity> -->
+  <!-- <material_brick_loss_tangent>0.02</material_brick_loss_tangent> -->
 
   <gaussian_noise_mean_cm>0.0</gaussian_noise_mean_cm>
   <apply_pair_bias>false</apply_pair_bias>
