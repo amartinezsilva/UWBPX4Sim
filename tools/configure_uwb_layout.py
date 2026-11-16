@@ -981,6 +981,7 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
             "frame_prefix": frame_prefix,
             "marker_array_topic": f"/{frame_prefix}/gt_marker_array",
             "world_frame_id": "map",
+            "wait_for_topic": "",
         }
 
     return {
@@ -998,6 +999,7 @@ def _default_offboard_params(role: str, vehicle_id: int) -> dict[str, Any]:
         "marker_array_topic": f"/{frame_prefix}/gt_marker_array",
         "distances_list_topic": f"/{frame_prefix}/eliko/Distances",
         "world_frame_id": "map",
+        "wait_for_topic": "",
     }
 
 
@@ -1074,6 +1076,7 @@ def build_uav_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "frame_prefix": params["frame_prefix"],
         "marker_array_topic": params["marker_array_topic"],
         "world_frame_id": params["world_frame_id"],
+        "wait_for_topic": str(params["wait_for_topic"]),
     }
 
     ros_params.update(_mounted_sensor_params(vehicle))
@@ -1108,6 +1111,7 @@ def build_ugv_offboard_params(layout: UwbLayout, assignment: SpawnAssignment) ->
         "marker_array_topic": params["marker_array_topic"],
         "distances_list_topic": params["distances_list_topic"],
         "world_frame_id": params["world_frame_id"],
+        "wait_for_topic": str(params["wait_for_topic"]),
         "tags": {"ids": [str(sensor.id) for sensor in layout.all_tags]},
     }
 

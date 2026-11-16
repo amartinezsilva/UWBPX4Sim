@@ -330,6 +330,7 @@ These keys are accepted for both UAVs and UGVs.
 | `frame_prefix` | Prefix used for ROS TF frames and default ROS topic naming. | `uav_<id>` or `ugv_<id>` |
 | `marker_array_topic` | ROS topic for the ground-truth marker trail. | `/<frame_prefix>/gt_marker_array` |
 | `world_frame_id` | Name of the world/map frame used for GT pose and TF publishing. | `map` |
+| `wait_for_topic` | Ground-truth pose topic (`geometry_msgs/PoseStamped`) of the robot this one waits for at its [hold points](#hold-points). Required when the trajectory has hold points. | empty |
 
 ### Eliko aggregated measurements
 
@@ -443,6 +444,18 @@ x=0.5, y=-0.5, z=2.0
 ```
 
 then the robot flies to world point `(3.5, -0.5, 2.0)`. The spawn roll, pitch and yaw only set the initial attitude and don't rotate the trajectory, because PX4's local frame keeps the world axes.
+
+### Hold points
+
+A trajectory CSV starts with a header row naming its columns: `x,y,z,yaw` are required. Three optional columns, `wait_x,wait_y,wait_r`, make a row a hold point: the robot follows its path up to that row, stops there, and waits until the other robot (its ground truth on `wait_for_topic`) is within `wait_r` metres, horizontally, of `(wait_x, wait_y)`. Then it goes on along its path. `wait_x` and `wait_y` are offsets from this robot's spawn position, like `x` and `y`. Rows without a hold leave the three cells empty:
+
+```text
+x,y,z,yaw,wait_x,wait_y,wait_r
+15.300,-0.100,0.000,2.4981,16.000,6.700,1.50
+15.200,-0.050,0.000,2.4981,,,
+```
+
+A UAV hovers at a hold point, and a UGV stands still there. This keeps robots in step, for example one waiting for the other to reach a place, whatever their speeds. [`demo_hallway.yaml`](../config/demo_hallway.yaml) uses it in both directions.
 
 ## ROS 2 workspace
 

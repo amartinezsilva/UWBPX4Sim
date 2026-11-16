@@ -74,6 +74,7 @@
 #include <stdexcept>
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
+#include "trajectory_csv.hpp"
 
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -173,6 +174,9 @@ public:
 		this->get_parameter("world_frame_id", world_frame_id_);
 
 		this->get_parameter("cruise_speed", cruise_speed_);
+		std::string wait_for_topic;
+		this->get_parameter("wait_for_topic", wait_for_topic);
+		wait_for_topic_ = wait_for_topic;
 
 		pos_scale_err_ = odom_error_position_ / 100.0;
 		yaw_scale_err_ = odom_error_angle_   / 100.0;
@@ -219,6 +223,19 @@ public:
 			throw std::runtime_error("Missing UAV trajectory data.");
 		}
 		initial_hover_target_ = trajectory_.front(); 
+		if (!waits_.empty()) {
+			if (wait_for_topic_.empty()) {
+				RCLCPP_FATAL(this->get_logger(), "The trajectory has hold points but wait_for_topic is not set.");
+				throw std::runtime_error("Missing wait_for_topic.");
+			}
+			wait_for_subscriber_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+				wait_for_topic_, 10, [this](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+					std::lock_guard<std::mutex> lock(other_mutex_);
+					other_xy_ = Eigen::Vector2d(msg->pose.position.x, msg->pose.position.y);
+					have_other_ = true;
+				});
+			RCLCPP_INFO(this->get_logger(), "%zu hold points, waiting on %s.", waits_.size(), wait_for_topic_.c_str());
+		}
 
 		// Create publishers with the topics from params
 		offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(offboard_control_mode_topic_, 10);
@@ -330,6 +347,7 @@ public:
 					Eigen::Matrix3d R_last_true_enu = q_last_true_enu_.toRotationMatrix();
 					Eigen::Vector3d dpos_true_body = R_last_true_enu.transpose() * dpos_true_enu;
 
+					// 3) Add body-frame noise / scale
 					// Per-run scale error, plus a random walk whose variance grows with the distance
 					// travelled (independent of the update rate: sigma per step = k * sqrt(step)).
 					const double sigma_step = pos_noise_density_ * std::sqrt(dpos_true_body.norm());
@@ -691,6 +709,21 @@ private:
     rclcpp::Time start_time_;
 	bool started_ = false;
 	uint8_t vehicle_target_system_ = 2;
+
+	// Hold points (trajectory_csv.hpp): index -> wait condition, in world ENU.
+	std::map<size_t, px4_sim_offboard::WaitCondition> waits_;
+	std::string wait_for_topic_;
+	rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr wait_for_subscriber_;
+	std::mutex other_mutex_;
+	bool have_other_{false};
+	Eigen::Vector2d other_xy_{0.0, 0.0};
+	bool holding_{false};
+	double hold_yaw_enu_{0.0};
+	bool waitSatisfied(const px4_sim_offboard::WaitCondition &w)
+	{
+		std::lock_guard<std::mutex> lock(other_mutex_);
+		return have_other_ && std::hypot(other_xy_.x() - w.x, other_xy_.y() - w.y) <= w.r;
+	}
 	std::string frame_prefix_{"uav"};
 	std::string world_frame_id_{"map"};
 	std::string marker_array_topic_{"/uav/gt_marker_array"};
@@ -702,52 +735,27 @@ private:
 
 void UAVOffboardControl::load_trajectory(const std::string &filename)
 {
-	std::ifstream file(filename);
-	if (!file.is_open()) {
-		RCLCPP_ERROR(this->get_logger(), "Failed to open trajectory file: %s", filename.c_str());
+	px4_sim_offboard::TrajectoryCsv csv;
+	std::string error;
+	std::vector<std::string> warnings;
+	const bool ok = px4_sim_offboard::loadTrajectoryCsv(filename, csv, error, warnings);
+	for (const auto &w : warnings) RCLCPP_WARN(this->get_logger(), "%s", w.c_str());
+	if (!ok) {
+		RCLCPP_ERROR(this->get_logger(), "Trajectory: %s", error.c_str());
 		return;
 	}
 
-	std::string line;
-	size_t line_num = 0;
-
-	// Skip the header row
-	std::getline(file, line);  // <- Skip line 1
-
-	while (std::getline(file, line)) {
-		line_num++;
-		std::stringstream ss(line);
-		std::string val;
-		std::array<double, 4> pose;
-		int i = 0;
-		while (std::getline(ss, val, ',')) {
-			try {
-				pose[i++] = std::stod(val);
-			} catch (const std::exception &e) {
-				RCLCPP_WARN(this->get_logger(), "Skipping invalid line %zu: %s", line_num + 1, line.c_str());
-				i = -1;
-				break;
-			}
-		}
-		if (i == 4) {
-			// Trajectories are spawn-relative ENU offsets (world axes).
-			// Shift them once into world ENU to match the tracked pose.
-			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
-
-			Eigen::Quaterniond q_local_enu(
-				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = q_local_enu;
-			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
-
-			trajectory_.push_back({
-				world_pos_enu.x(),
-				world_pos_enu.y(),
-				world_pos_enu.z(),
-				yaw_world_enu});
-		}
+	// Trajectories are spawn-relative ENU offsets (world axes).
+	// Shift them once into world ENU to match the tracked pose.
+	for (const auto &pose : csv.points) {
+		const Eigen::Vector3d world_pos_enu = Eigen::Vector3d(pose[0], pose[1], pose[2]) + origin_pos_enu_;
+		trajectory_.push_back({world_pos_enu.x(), world_pos_enu.y(), world_pos_enu.z(), wrapPi(pose[3])});
 	}
-	file.close();
+	for (auto [idx, w] : csv.waits) {
+		w.x += origin_pos_enu_.x();
+		w.y += origin_pos_enu_.y();
+		waits_[idx] = w;
+	}
 
 	RCLCPP_INFO(this->get_logger(), "Loaded %zu trajectory points.", trajectory_.size());
 }
@@ -872,10 +880,14 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	// path length (lookahead + 1 m) rather than by point count, so that on a
 	// path that crosses itself (e.g. a recorded flight with repeated loops) the
 	// search can't jump ahead to a later pass that happens to come close.
+	// Next hold point: neither the search nor the lookahead goes past it.
+	const auto hold = waits_.lower_bound(closest_idx_);
+	const size_t limit = hold != waits_.end() ? hold->first : trajectory_.size() - 1;
+
 	const double search_length = lookahead_distance_ + 1.0;
 	size_t search_start = closest_idx_;
 	size_t search_end = search_start + 1;
-	for (double along = 0.0; search_end < trajectory_.size() && along <= search_length; ++search_end) {
+	for (double along = 0.0; search_end <= limit && along <= search_length; ++search_end) {
 		const double sx = trajectory_[search_end][0] - trajectory_[search_end - 1][0];
 		const double sy = trajectory_[search_end][1] - trajectory_[search_end - 1][1];
 		const double sz = trajectory_[search_end][2] - trajectory_[search_end - 1][2];
@@ -900,9 +912,9 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	double accum_dist = 0.0;
 	// Aim at the final point when less than the lookahead distance is left,
 	// so the vehicle reaches the end of the path before landing.
-	size_t new_target_idx = trajectory_.size() - 1;
+	size_t new_target_idx = limit;
 
-	for (size_t i = start + 1; i < trajectory_.size(); ++i) {
+	for (size_t i = start + 1; i <= limit; ++i) {
 		double dx = trajectory_[i][0] - trajectory_[i-1][0];
 		double dy = trajectory_[i][1] - trajectory_[i-1][1];
 		double dz = trajectory_[i][2] - trajectory_[i-1][2];
@@ -932,6 +944,33 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 		return;
 	}
 
+	// Hold point: fly to it, then hover there (fixed heading) until its condition holds.
+	bool hover_here = false;
+	if (hold != waits_.end()) {
+		const auto &hp = trajectory_[hold->first];
+		const double dh = std::sqrt(std::pow(hp[0] - pose[0], 2) + std::pow(hp[1] - pose[1], 2) + std::pow(hp[2] - pose[2], 2));
+		// Only once the path has been followed up to it (the target is the hold row):
+		// a path may pass the same spot earlier.
+		if (holding_ || (current_target_idx_ == hold->first && dh < 0.3)) {
+			const auto &w = hold->second;
+			if (!holding_) {
+				holding_ = true;
+				hold_yaw_enu_ = pose[3];
+				RCLCPP_INFO(this->get_logger(), "Holding at point %zu until %s is within %.1f m of (%.1f, %.1f).",
+				            hold->first, wait_for_topic_.c_str(), w.r, w.x, w.y);
+			}
+			if (waitSatisfied(w)) {
+				RCLCPP_INFO(this->get_logger(), "Hold at point %zu released.", hold->first);
+				holding_ = false;
+				closest_idx_ = hold->first;
+				waits_.erase(hold);
+			}
+			ex = hp[0] - pose[0]; ey = hp[1] - pose[1]; ez = hp[2] - pose[2];
+			dist = dh;
+			hover_here = true;
+		}
+	}
+
 	double vx = 0.0, vy = 0.0, vz = 0.0;
 	if (dist > 1e-3) {
 		const double vmag = std::min(cruise_speed_, dist * 0.8); // taper near goal
@@ -945,8 +984,8 @@ void UAVOffboardControl::publish_trajectory_setpoint()
 	Eigen::Vector3d v_local_enu = v_world_enu;
 	Eigen::Vector3d v_local_ned = px4_ros_com::frame_transforms::enu_to_ned_local_frame(v_local_enu);
 
-	// Yaw to face the target in world ENU
-	double yaw_world_enu = std::atan2(ey, ex);
+	// Yaw to face the target in world ENU (kept fixed while hovering at a hold point)
+	double yaw_world_enu = hover_here ? hold_yaw_enu_ : std::atan2(ey, ex);
 
 	// Convert that yaw to PX4 NED heading
 	Eigen::Quaterniond q_world_enu(Eigen::AngleAxisd(yaw_world_enu, Eigen::Vector3d::UnitZ()));

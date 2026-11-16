@@ -1,0 +1,41 @@
+uavs:
+- id: 0
+  offboard:
+    trajectory_csv_file: trajectory_hallway_uav.csv
+    lookahead_distance: 1
+    cruise_speed: 0.6
+    odom_error_position: 1.0
+    odom_error_angle: 0.0
+    odom_noise_position: 0.05
+    odom_noise_angle: 0.0
+    odom_gyro_bias: 0.005
+    wait_for_topic: /ugv_0/gt
+  spawn_pose: [3, 0.3, 0.2, 0, 0, 0]
+  tags:
+  - id: 1
+    position: [-0.24, -0.24, -0.06]
+  - id: 2
+    position: [0.24, 0.24, -0.06]
+ugvs:
+- anchors:
+  - id: 1
+    position: [-0.32, 0.3, 0.875]
+  - id: 2
+    position: [0.32, -0.3, 0.875]
+  - id: 3
+    position: [0.32, 0.3, 0.33]
+  - id: 4
+    position: [-0.32, -0.3, 0.33]
+  id: 0
+  offboard:
+    trajectory_csv_file: trajectory_hallway_agv.csv
+    lookahead_distance: 0.6
+    cruise_speed: 0.6
+    odom_error_position: 1.0
+    odom_error_angle: 0.5
+    odom_noise_position: 0.03
+    odom_noise_angle: 0.3
+    odom_gyro_bias: 0.01
+    wait_for_topic: /uav_0/gt
+  spawn_pose: [3, -2.8, 0, 0, 0, 1.0471975512]
+world: hallway_rooms

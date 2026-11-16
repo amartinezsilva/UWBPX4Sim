@@ -100,12 +100,13 @@ Any robot can carry `tags`, `anchors` or both. Tag ids must be unique across the
 
 ### Demos
 
-Four ready-made experiments ship in [`config/`](config/). The first two are the LOS and NLOS experiments of the UWBPX4Sim paper (Robot Meets Ranging workshop, ICRA 2026), with a UGV-UAV team carrying anchors and tags; the last two reproduce real flights with the Loco Positioning presets:
+Five ready-made experiments ship in [`config/`](config/). The first two are the LOS and NLOS experiments of the UWBPX4Sim paper (Robot Meets Ranging workshop, ICRA 2026), with a UGV-UAV team carrying anchors and tags; the third takes that team indoors; the last two reproduce real flights with the Loco Positioning presets:
 
 | Layout | Scenario | Preset |
 | --- | --- | --- |
 | [`demo_los.yaml`](config/demo_los.yaml) | A UGV with four anchors and a UAV with two tags, in open space. The UAV flies 80 m away and back, so noise and dropout grow with distance until the link closes. | `eliko_twr` |
 | [`demo_nlos.yaml`](config/demo_nlos.yaml) | The same team side by side past walls of increasing thickness ([`worlds/walls_nlos.sdf`](worlds/walls_nlos.sdf)): a 25 cm wall (soft NLOS), a 75 cm corner (hard NLOS) and a 120 cm section (blackout). | `eliko_twr` |
+| [`demo_hallway.yaml`](config/demo_hallway.yaml) | The same team in a building ([`worlds/hallway_rooms.sdf`](worlds/hallway_rooms.sdf)): a hallway with three rooms on each side, plasterboard inside, concrete outside and on the roof, and windows at the end of the hallway and in the two middle rooms. The UGV starts in a room, turned 60° from the UAV, which waits in front of the door in line of sight. The UGV visits three rooms while the UAV flies along the hallway, then parks by the window. The UAV flies out of the window, and once it is outside the UGV visits the other three rooms while the UAV flies around the building, coming back in through a middle room's window to land in the hallway. The robots keep in step with [hold points](docs/advanced_setup.md#hold-points), and both odometries drift, with systematic scale errors, random walks and a gyro bias. | `eliko_twr` |
 | [`demo_util_nlos.yaml`](config/demo_util_nlos.yaml) | One of the [UTIL](https://utiasdsl.github.io/util-uwb-dataset/) dataset's real NLOS flights [2]: its eight surveyed anchors, a metal and three wooden cabinets blocking four of them ([`worlds/util_nlos.sdf`](worlds/util_nlos.sdf)), and the recorded path flown by an x500. | `lps_tdoa` |
 | [`demo_lps_twr.yaml`](config/demo_lps_twr.yaml) | One of Pfeiffer et al.'s real TWR flights [3]: the eight surveyed Loco Positioning anchors of the TU Delft Cyberzoo, and the recorded star-shaped path flown by an x500, in line of sight. | `lps_twr` |
 

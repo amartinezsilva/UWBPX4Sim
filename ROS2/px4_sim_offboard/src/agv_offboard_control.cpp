@@ -38,6 +38,7 @@
 #include <random> 
 
 #include "ament_index_cpp/get_package_share_directory.hpp"
+#include "trajectory_csv.hpp"
 
 #include <tf2_ros/transform_broadcaster.h>
 #include <geometry_msgs/msg/transform_stamped.hpp>
@@ -248,6 +249,16 @@ private:
     // Set once the rover reaches the end of its path and is disarmed.
     bool finished_ = false;
 
+    // Hold points (trajectory_csv.hpp): index -> wait condition, in world ENU.
+    std::map<size_t, px4_sim_offboard::WaitCondition> waits_;
+    std::string wait_for_topic_;
+    rclcpp::Subscription<geometry_msgs::msg::PoseStamped>::SharedPtr wait_for_subscriber_;
+    std::mutex other_mutex_;
+    bool have_other_{false};
+    Eigen::Vector2d other_xy_{0.0, 0.0};
+    bool holding_{false};
+    bool waitSatisfied(const px4_sim_offboard::WaitCondition &w);
+
     // In class AGVOffboardControl private:
     int    last_heading_reset_counter_{-1};
     double heading_reset_accum_{0.0};   // accumulated delta_heading across resets
@@ -326,6 +337,7 @@ AGVOffboardControl::AGVOffboardControl()
 
     this->get_parameter("lookahead_distance", lookahead_distance_);
     this->get_parameter("cruise_speed", cruise_speed_);
+    this->get_parameter("wait_for_topic", wait_for_topic_);
 
 
     std::vector<double> agv_origin_vec;
@@ -373,6 +385,19 @@ AGVOffboardControl::AGVOffboardControl()
     if (trajectory_.empty()) {
         RCLCPP_FATAL(this->get_logger(), "No trajectory points were loaded from %s", full_csv_path.c_str());
         throw std::runtime_error("Missing AGV trajectory data.");
+    }
+    if (!waits_.empty()) {
+        if (wait_for_topic_.empty()) {
+            RCLCPP_FATAL(this->get_logger(), "The trajectory has hold points but wait_for_topic is not set.");
+            throw std::runtime_error("Missing wait_for_topic.");
+        }
+        wait_for_subscriber_ = this->create_subscription<geometry_msgs::msg::PoseStamped>(
+            wait_for_topic_, 10, [this](geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+                std::lock_guard<std::mutex> lock(other_mutex_);
+                other_xy_ = Eigen::Vector2d(msg->pose.position.x, msg->pose.position.y);
+                have_other_ = true;
+            });
+        RCLCPP_INFO(this->get_logger(), "%zu hold points, waiting on %s.", waits_.size(), wait_for_topic_.c_str());
     }
 
     offboard_control_mode_publisher_ = this->create_publisher<OffboardControlMode>(offboard_control_mode_topic_, 10);
@@ -485,6 +510,7 @@ AGVOffboardControl::AGVOffboardControl()
             Eigen::Matrix3d R_last_true_enu = q_last_true_enu_.toRotationMatrix();
             Eigen::Vector3d dpos_true_body = R_last_true_enu.transpose() * dpos_true_enu;
 
+            // 3) Add body-frame noise / scale (your per-axis % is fine here)
             // Per-run scale error, plus a random walk whose variance grows with the distance
             // travelled (independent of the update rate: sigma per step = k * sqrt(step)).
             const double sigma_step = pos_noise_density_ * std::sqrt(dpos_true_body.norm());
@@ -831,52 +857,27 @@ void AGVOffboardControl::timer_callback()
 
 void AGVOffboardControl::load_trajectory(const std::string &filename)
 {
-	std::ifstream file(filename);
-	if (!file.is_open()) {
-		RCLCPP_ERROR(this->get_logger(), "Failed to open trajectory file: %s", filename.c_str());
+	px4_sim_offboard::TrajectoryCsv csv;
+	std::string error;
+	std::vector<std::string> warnings;
+	const bool ok = px4_sim_offboard::loadTrajectoryCsv(filename, csv, error, warnings);
+	for (const auto &w : warnings) RCLCPP_WARN(this->get_logger(), "%s", w.c_str());
+	if (!ok) {
+		RCLCPP_ERROR(this->get_logger(), "Trajectory: %s", error.c_str());
 		return;
 	}
 
-	std::string line;
-	size_t line_num = 0;
-
-	// Skip the header row
-	std::getline(file, line);  // <- Skip line 1
-
-	while (std::getline(file, line)) {
-		line_num++;
-		std::stringstream ss(line);
-		std::string val;
-		std::array<double, 4> pose;
-		int i = 0;
-		while (std::getline(ss, val, ',')) {
-			try {
-				pose[i++] = std::stod(val);
-			} catch (const std::exception &e) {
-				RCLCPP_WARN(this->get_logger(), "Skipping invalid line %zu: %s", line_num + 1, line.c_str());
-				i = -1;
-				break;
-			}
-		}
-		if (i == 4) {
-			// Trajectories are spawn-relative ENU offsets (world axes).
-			// Shift them once into world ENU to match the tracked pose.
-			Eigen::Vector3d local_pos_enu(pose[0], pose[1], pose[2]);
-			Eigen::Vector3d world_pos_enu = local_pos_enu + origin_pos_enu_;
-
-			Eigen::Quaterniond q_local_enu(
-				Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
-			Eigen::Quaterniond q_world_enu = q_local_enu;
-			const double yaw_world_enu = wrapPi(yaw_from_quat_enu(q_world_enu));
-
-			trajectory_.push_back({
-				world_pos_enu.x(),
-				world_pos_enu.y(),
-				world_pos_enu.z(),
-				yaw_world_enu});
-		}
+	// Trajectories are spawn-relative ENU offsets (world axes).
+	// Shift them once into world ENU to match the tracked pose.
+	for (const auto &pose : csv.points) {
+		const Eigen::Vector3d world_pos_enu = Eigen::Vector3d(pose[0], pose[1], pose[2]) + origin_pos_enu_;
+		trajectory_.push_back({world_pos_enu.x(), world_pos_enu.y(), world_pos_enu.z(), wrapPi(pose[3])});
 	}
-	file.close();
+	for (auto [idx, w] : csv.waits) {
+		w.x += origin_pos_enu_.x();
+		w.y += origin_pos_enu_.y();
+		waits_[idx] = w;
+	}
 	RCLCPP_INFO(this->get_logger(), "Loaded %zu trajectory points.", trajectory_.size());
 
 	double path_length = 0.0;
@@ -887,6 +888,12 @@ void AGVOffboardControl::load_trajectory(const std::string &filename)
 	if (stationary_) {
 		RCLCPP_INFO(this->get_logger(), "Trajectory doesn't move: the rover stays disarmed at its spawn pose.");
 	}
+}
+
+bool AGVOffboardControl::waitSatisfied(const px4_sim_offboard::WaitCondition &w)
+{
+	std::lock_guard<std::mutex> lock(other_mutex_);
+	return have_other_ && std::hypot(other_xy_.x() - w.x, other_xy_.y() - w.y) <= w.r;
 }
 
 void AGVOffboardControl::publish_offboard_control_mode()
@@ -913,10 +920,14 @@ void AGVOffboardControl::publish_trajectory_setpoint()
 
     if(!started_ || finished_) return;
 
+    // ---- Next hold point: neither the search nor the lookahead goes past it ----
+    const auto hold = waits_.lower_bound(closest_idx_);
+    const size_t limit = hold != waits_.end() ? hold->first : trajectory_.size() - 1;
+
     // ---- Closest-point search in a forward window (like UAV) ----
     const size_t window_size = 50;
     const size_t search_start = closest_idx_;
-    const size_t search_end   = std::min(closest_idx_ + window_size, trajectory_.size() - 1);
+    const size_t search_end   = std::min(closest_idx_ + window_size, limit);
 
     double min_dist = std::numeric_limits<double>::max();
     size_t new_closest_idx = closest_idx_;
@@ -934,19 +945,17 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     // ---- Arc-length lookahead from the closest index ----
     size_t new_target_idx = new_closest_idx;
     double accum = 0.0;
-    for (size_t i = new_closest_idx + 1; i < trajectory_.size(); ++i) {
+    for (size_t i = new_closest_idx + 1; i <= limit; ++i) {
         const double dx = trajectory_[i][0] - trajectory_[i-1][0];
         const double dy = trajectory_[i][1] - trajectory_[i-1][1];
         accum += std::sqrt(dx*dx + dy*dy);
-        if (accum >= lookahead_distance_) {
-            new_target_idx = i;
-            break;
-        }
+        new_target_idx = i;
+        if (accum >= lookahead_distance_) break;
     }
 
     // ensure target advances at least one sample (prevents zero-dist target)
     if (new_target_idx == new_closest_idx) {
-        new_target_idx = std::min(new_closest_idx + 1, trajectory_.size() - 1);
+        new_target_idx = std::min(new_closest_idx + 1, limit);
     }
 
     closest_idx_ = new_closest_idx;
@@ -959,9 +968,44 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     double dy = target[1] - pose[1];
     double dist = std::sqrt(dx*dx + dy*dy);
 
-    // End-of-path stop (optional): if near the last waypoint, stop.
-    // If we're very near the end of the path, trigger LAND (once)
-	if ((closest_idx_ >= 0.8*trajectory_.size()) && dist < 0.4) {
+    // ---- Hold point: slow down towards it, then stop until its condition holds ----
+    double speed = cruise_speed_;
+    if (hold != waits_.end()) {
+        const auto &hp = trajectory_[hold->first];
+        const double dh = std::hypot(hp[0] - pose[0], hp[1] - pose[1]);
+        // Only once the path has been followed up to it (the target is the hold row):
+        // a path may pass the same spot earlier.
+        if (holding_ || (current_target_idx_ == hold->first && dh < 0.3)) {
+            const auto &w = hold->second;
+            if (!holding_) {
+                holding_ = true;
+                RCLCPP_INFO(this->get_logger(), "Holding at point %zu until %s is within %.1f m of (%.1f, %.1f).",
+                            hold->first, wait_for_topic_.c_str(), w.r, w.x, w.y);
+            }
+            if (waitSatisfied(w)) {
+                RCLCPP_INFO(this->get_logger(), "Hold at point %zu released.", hold->first);
+                holding_ = false;
+                closest_idx_ = hold->first;
+                waits_.erase(hold);
+            }
+            // Stand still, keeping the current heading.
+            Eigen::Quaterniond q_hold_enu(Eigen::AngleAxisd(pose[3], Eigen::Vector3d::UnitZ()));
+            Eigen::Quaterniond q_hold_ned = px4_ros_com::frame_transforms::ros_to_px4_orientation(q_hold_enu);
+            TrajectorySetpoint stop{};
+            const auto nan = std::numeric_limits<float>::quiet_NaN();
+            stop.position = {nan, nan, nan};
+            stop.velocity = {0.0f, 0.0f, 0.0f};
+            stop.yaw = static_cast<float>(wrapPi(
+                px4_ros_com::frame_transforms::utils::quaternion::quaternion_get_yaw(q_hold_ned)));
+            stop.timestamp = this->get_clock()->now().nanoseconds() / 1000;
+            trajectory_setpoint_publisher_->publish(stop);
+            return;
+        }
+        speed = std::min(cruise_speed_, std::max(0.15, 0.8 * dh));
+    }
+
+    // End-of-path stop: once the target is the last waypoint and it is close, stop.
+	if ((closest_idx_ >= 0.8*trajectory_.size()) && current_target_idx_ == trajectory_.size() - 1 && dist < 0.4) {
 		// Stop for good: PX4 would otherwise keep following the last
 		// setpoint and circle the end point.
 		TrajectorySetpoint stop{};
@@ -987,8 +1031,8 @@ void AGVOffboardControl::publish_trajectory_setpoint()
     const double yaw_world_enu = std::atan2(dy, dx);
 
     // // Velocity in WORLD ENU
-    const double vx_world_enu = cruise_speed_ * ux;
-    const double vy_world_enu = cruise_speed_ * uy;
+    const double vx_world_enu = speed * ux;
+    const double vy_world_enu = speed * uy;
     const double vz_world_enu = 0.0;
 
     // --- Convert command to PX4 LOCAL NED ---
