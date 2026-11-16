@@ -48,7 +48,13 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 
 ### Link geometry
 
-For a tag at $`\mathbf{p}_t`$ and an anchor at $`\mathbf{a}`$, the true range is $`d = \lVert \mathbf{p}_t - \mathbf{a} \rVert`$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles: exactly with box collisions (in each box's own, possibly rotated, frame), and through the link's world-axis-aligned bounding box (AABB) for any other shape. Chord lengths are merged per material, so overlapping links of one wall aren't counted twice:
+For a tag at $`\mathbf{p}_t`$ and an anchor at $`\mathbf{a}`$, the true range is $`d = \lVert \mathbf{p}_t - \mathbf{a} \rVert`$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles. Each `<collision>` is intersected exactly, in its own (possibly rotated) frame:
+
+- **Boxes, spheres, ellipsoids, cylinders and capsules** analytically.
+- **Meshes** triangle by triangle, so only the length inside material counts: a link through a shelf crosses its boards, not the air between them, and a hollow container counts only its walls. The mesh must be closed (watertight) and consistently oriented. Separate, touching or overlapping parts in one mesh are fine, and so is an inner cavity.
+- **Other shapes** (planes, heightmaps, polylines, cones), or a mesh that can't be loaded, make the whole link fall back to its world-axis-aligned bounding box (AABB), which over-estimates the blocked length. The plugin warns once per link.
+
+To model a hollow object, use a closed mesh of its actual walls and shelves, or several boxes in one link. Chord lengths are merged per material, so overlapping collisions or links of one wall aren't counted twice:
 
 - $`\ell_m`$ -- chord length through obstacles of material $`m`$. Untagged obstacles are the `generic` material. With `enable_material_attenuation: true`, an obstacle's material comes from a `<uwb:material>` element inside one of its `<collision>`s or its `<model>`, or else from a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`. The most specific one wins: collision, link name, model, then model name. `<uwb:material>` is a custom SDF element, so declare its prefix on the root, `<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">` (SDF's own `<material>` only describes appearance). Names are case-insensitive. The built-in materials are in the [Material table](#material-table). You can add your own, see [Custom materials](#custom-materials). Any other name logs a warning once and counts as `generic`.
 - $`\ell_{\text{body}}`$ -- chord length through the vehicles' `base_link`s.
@@ -234,7 +240,7 @@ In LOS, the noise matches at every distance, at about 5-6 cm, and the simulated 
 
 *Figure 2: Static data. Left: LOS spread against distance. Right: error shift by material, with the obstacle on the anchor-tag line (anTag).*
 
-Heavier obstacles shift the error more, in reality and in the simulation. Hollow objects (the plastic container and the wooden cabinet) are over-predicted by about 4 cm, since they're simulated as solid boxes.
+Heavier obstacles shift the error more, in reality and in the simulation. Hollow objects (the plastic container and the wooden cabinet) are over-predicted by about 4 cm, since they're simulated as solid boxes. The plugin can now intersect closed meshes exactly (see [Link geometry](#link-geometry)), so modelling these objects by their actual walls should reduce this, but that hasn't been tested: `util_nlos.sdf` still uses solid boxes.
 
 #### Flight data
 
@@ -328,7 +334,7 @@ What to keep in mind when moving from the simulator to real hardware. The number
 | Effect | In the simulator | Depends on | On real hardware |
 | --- | --- | --- | --- |
 | Received-power bias | Modelled ($`k_P`$) | The chip; distance and obstacles, through the loss | Predictable from the geometry, so an estimator can correct it |
-| Obstacle (NLOS) bias and noise | Approximate: obstacles are solid boxes, so hollow ones are over-predicted | Each obstacle's size and material | Predictable only if the obstacles and their materials are mapped |
+| Obstacle (NLOS) bias and noise | Approximate: as good as the obstacle's geometry; a hollow object modelled as a solid shape is over-predicted | Each obstacle's size and material | Predictable only if the obstacles and their materials are mapped |
 | Fixed per-transceiver offset | Approximate when drawn at random (smaller than in UTIL's flights); exact when set per transceiver | Antenna delay and mounting | Measure it with a short LOS distance test, and set it as `bias_cm` in the layout |
 | Outliers while moving or flying | Approximate: the same rate for every anchor | Motion of the tag or anchor | Reject them in the estimator |
 | Installation's overall noise level | One value per preset | The installation | Up to about threefold between installations; measure it with a short flight |
@@ -340,7 +346,7 @@ What to keep in mind when moving from the simulator to real hardware. The number
 | TDOA clock synchronisation | Not modelled; its effect wasn't measured | The anchor-to-anchor links | -- |
 
 **Also worth knowing:**
-- Each link is one straight ray, so reflections off specific walls aren't traced. Non-box obstacles use their bounding box, which over-estimates the blocked length.
+- Each link is one straight ray, so reflections off specific walls aren't traced, and nothing diffracts around an obstacle's edges: the loss is the material along the straight line. Planes, heightmaps, polylines, cones and open meshes use a bounding box, which over-estimates the blocked length (see [Link geometry](#link-geometry)).
 - TDOA uses a fixed reference anchor (lowest id), and the anchor-to-anchor link isn't simulated.
 - Each run draws its own anchor offsets, so one run can move results by about 4 cm: average over seeds, or set measured offsets with `bias_cm`.
 - The data covers 0.5-10 m. Beyond that, noise, dropout and the received-power bias are extrapolated, and Eliko's curves follow its documentation.

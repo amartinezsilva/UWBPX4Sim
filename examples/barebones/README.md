@@ -40,7 +40,7 @@ Values are in centimetres. The true distances are on `/uwb_gz_simulator/distance
 
 - **Put UWB links directly on the robot's model.** In a nested model the robot isn't recognised, so its own links count as obstacles.
 - **Name the robot's main link `base_link`** for it to shadow the signal. Other robot links are ignored.
-- **Give obstacles `<collision>` geometry.** Objects with only a `<visual>` don't block the signal. Boxes are exact, and other shapes use their axis-aligned bounding box, which over-estimates them.
+- **Give obstacles `<collision>` geometry.** Objects with only a `<visual>` don't block the signal. Boxes, spheres, ellipsoids, cylinders, capsules and closed meshes are intersected exactly (a mesh counts only the length inside material, so a hollow object can be modelled by its walls). Other shapes, and open meshes, use a bounding box, which over-estimates them. See [Link geometry](../../docs/measurement_model.md#link-geometry).
 - **Name the floor `ground_plane`.** The plugin skips that exact name. A plane with any other name still works, but Gazebo logs a warning at every update.
 
 To give a tag or anchor a fixed range offset, add `<uwb:bias_cm>-9.7</uwb:bias_cm>` inside its `<link>` (in cm, same namespace declaration as below). Links without it use the preset's random offsets.

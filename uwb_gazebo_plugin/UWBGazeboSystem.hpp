@@ -3,6 +3,7 @@
 #include <gz/sim/System.hh>
 #include <gz/transport/Node.hh>
 #include <gz/transport/Publisher.hh>
+#include <memory>
 #include <optional>
 #include <unordered_map>
 #include <unordered_set>
@@ -12,6 +13,11 @@
 
 namespace custom
 {
+/// \brief Obstacle shapes loaded once and reused every update (triangle
+/// meshes, and which links already warned about a bounding-box fallback).
+/// Defined in the .cpp.
+struct ObstacleGeometryCache;
+
 /// \brief Gazebo system plugin that simulates UWB ranges between tags and anchors.
 /// \details Each tag-anchor link is evaluated with a link budget: an excess
 /// loss L (dB) from free-space path loss plus every obstacle the line of
@@ -194,5 +200,8 @@ private:
   // Names in materials_ that are user-defined, not from the built-in table.
   std::unordered_set<std::string> customMaterials_;
   std::unordered_set<std::string> warnedUnknownMaterials_;
+
+  // Obstacle meshes, welded and checked once per collision entity.
+  std::shared_ptr<ObstacleGeometryCache> geometryCache_;
 };
 }

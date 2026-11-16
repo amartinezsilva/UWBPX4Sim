@@ -26,7 +26,18 @@
 
 #include <gz/sim/EntityComponentManager.hh>
 #include <gz/math/Pose3.hh>
+#include <array>
+#include <limits>
+#include <map>
+#include <gz/common/Mesh.hh>
+#include <gz/common/SubMesh.hh>
+#include <gz/sim/Util.hh>
 #include <sdf/Box.hh>
+#include <sdf/Capsule.hh>
+#include <sdf/Cylinder.hh>
+#include <sdf/Ellipsoid.hh>
+#include <sdf/Mesh.hh>
+#include <sdf/Sphere.hh>
 #include <sdf/Collision.hh>
 #include <sdf/Model.hh>
 #include <sdf/Element.hh>
@@ -614,6 +625,8 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
     gzwarn << "[UWBGazeboSystem] Custom materials are defined but enable_material_attenuation is "
            << "false: every obstacle counts as generic.\n";
 
+  this->geometryCache_ = std::make_shared<ObstacleGeometryCache>();
+
   this->biasCmDist_ =
       std::uniform_real_distribution<double>(this->biasMinCm_, this->biasMaxCm_);
   this->pairBiasCm_.clear();
@@ -736,49 +749,413 @@ bool segmentIntersectsBox(const gz::math::Vector3d &_start,
   return true;
 }
 
+namespace
+{
+using Intervals = std::vector<std::pair<double, double>>;
+
+// Adds [_tEnter, _tExit] clipped to the segment, t in [0, 1].
+void addClippedInterval(Intervals &_intervals, const double _tEnter, const double _tExit)
+{
+  const double tEnter = std::max(_tEnter, 0.0);
+  const double tExit = std::min(_tExit, 1.0);
+  if (tExit > tEnter)
+    _intervals.emplace_back(tEnter, tExit);
+}
+
+// Roots of a t^2 + b t + c = 0, in order. False if there are none (or a ~ 0).
+bool solveQuadratic(const double _a, const double _b, const double _c, double &_t1, double &_t2)
+{
+  if (std::abs(_a) < 1e-12)
+    return false;
+  const double disc = _b * _b - 4.0 * _a * _c;
+  if (disc < 0.0)
+    return false;
+  const double sq = std::sqrt(disc);
+  _t1 = (-_b - sq) / (2.0 * _a);
+  _t2 = (-_b + sq) / (2.0 * _a);
+  return true;
+}
+
+// Sphere of radius _radius centred at _center, in the segment's frame.
+void segmentSphereIntervals(const gz::math::Vector3d &_start, const gz::math::Vector3d &_segment,
+                            const gz::math::Vector3d &_center, const double _radius,
+                            Intervals &_intervals)
+{
+  const gz::math::Vector3d rel = _start - _center;
+  double t1 = 0.0;
+  double t2 = 0.0;
+  if (solveQuadratic(_segment.Dot(_segment), 2.0 * _segment.Dot(rel),
+                     rel.Dot(rel) - _radius * _radius, t1, t2))
+    addClippedInterval(_intervals, t1, t2);
+}
+
+// Ellipsoid with semi-axes _radii along the local axes: scaled to a unit sphere.
+void segmentEllipsoidIntervals(const gz::math::Vector3d &_start, const gz::math::Vector3d &_segment,
+                               const gz::math::Vector3d &_radii, Intervals &_intervals)
+{
+  if (_radii.X() <= 0.0 || _radii.Y() <= 0.0 || _radii.Z() <= 0.0)
+    return;
+  const gz::math::Vector3d inv(1.0 / _radii.X(), 1.0 / _radii.Y(), 1.0 / _radii.Z());
+  segmentSphereIntervals(_start * inv, _segment * inv, gz::math::Vector3d::Zero, 1.0, _intervals);
+}
+
+// Cylinder of radius _radius around the local z axis, z in +-_length/2.
+void segmentCylinderIntervals(const gz::math::Vector3d &_start, const gz::math::Vector3d &_segment,
+                              const double _radius, const double _length, Intervals &_intervals)
+{
+  constexpr double kInf = std::numeric_limits<double>::infinity();
+  double tMin = -kInf;
+  double tMax = kInf;
+
+  // Radial part: inside the infinite cylinder.
+  const double a = _segment.X() * _segment.X() + _segment.Y() * _segment.Y();
+  const double b = 2.0 * (_start.X() * _segment.X() + _start.Y() * _segment.Y());
+  const double c = _start.X() * _start.X() + _start.Y() * _start.Y() - _radius * _radius;
+  if (a < 1e-12)
+  {
+    if (c > 0.0)
+      return;  // parallel to the axis and outside it
+  }
+  else if (!solveQuadratic(a, b, c, tMin, tMax))
+  {
+    return;
+  }
+
+  // Axial part: between the end caps.
+  const double halfLength = 0.5 * _length;
+  if (std::abs(_segment.Z()) < 1e-12)
+  {
+    if (std::abs(_start.Z()) > halfLength)
+      return;
+  }
+  else
+  {
+    double z1 = (-halfLength - _start.Z()) / _segment.Z();
+    double z2 = (halfLength - _start.Z()) / _segment.Z();
+    if (z1 > z2)
+      std::swap(z1, z2);
+    tMin = std::max(tMin, z1);
+    tMax = std::min(tMax, z2);
+  }
+  addClippedInterval(_intervals, tMin, tMax);
+}
+
+// Capsule: a cylinder plus a sphere on each end cap. The three overlap; the
+// intervals are merged later, so the overlap isn't counted twice.
+void segmentCapsuleIntervals(const gz::math::Vector3d &_start, const gz::math::Vector3d &_segment,
+                             const double _radius, const double _length, Intervals &_intervals)
+{
+  segmentCylinderIntervals(_start, _segment, _radius, _length, _intervals);
+  segmentSphereIntervals(_start, _segment, {0.0, 0.0, 0.5 * _length}, _radius, _intervals);
+  segmentSphereIntervals(_start, _segment, {0.0, 0.0, -0.5 * _length}, _radius, _intervals);
+}
+
+}  // namespace
+
+namespace custom
+{
+// A collision mesh in its collision frame (scale applied), with its
+// vertices welded by position. Closed means every edge is used as often in
+// one direction as in the other: the mesh is one or more closed, consistently
+// oriented shells (parts may touch or overlap), turned to face outwards.
+// Only then can the segment's crossings tell inside from outside.
+struct TriangleMesh
+{
+  std::vector<gz::math::Vector3d> vertices;
+  std::vector<std::array<unsigned int, 3>> triangles;
+  gz::math::Vector3d min;
+  gz::math::Vector3d max;
+  bool closed{false};
+};
+
+struct ObstacleGeometryCache
+{
+  // Per collision entity; null if the mesh couldn't be loaded.
+  std::unordered_map<gz::sim::Entity, std::shared_ptr<const TriangleMesh>> meshes;
+  // Links already warned about falling back to their bounding box.
+  std::unordered_set<gz::sim::Entity> warnedFallback;
+};
+}  // namespace custom
+
+namespace
+{
+// Loads, welds and checks an SDF mesh. Null if it can't be loaded or has no
+// triangles. _description says what was found, for the log.
+std::shared_ptr<const custom::TriangleMesh> buildTriangleMesh(const sdf::Mesh &_meshSdf,
+                                                              std::string &_description)
+{
+  const gz::common::Mesh *mesh = gz::sim::loadMesh(_meshSdf);
+  if (!mesh)
+  {
+    _description = "could not be loaded";
+    return nullptr;
+  }
+
+  auto shape = std::make_shared<custom::TriangleMesh>();
+  // Weld vertices that share a position (to 1 um): exporters split them per
+  // face for normals and texture coordinates, which would otherwise make
+  // every edge look open.
+  constexpr double kWeldM = 1e-6;
+  std::map<std::array<long long, 3>, unsigned int> welded;
+  auto weld = [&](const gz::math::Vector3d &_v)
+  {
+    const std::array<long long, 3> key = {std::llround(_v.X() / kWeldM), std::llround(_v.Y() / kWeldM),
+                                          std::llround(_v.Z() / kWeldM)};
+    const auto [it, inserted] = welded.emplace(key, static_cast<unsigned int>(shape->vertices.size()));
+    if (inserted)
+      shape->vertices.push_back(_v);
+    return it->second;
+  };
+
+  const gz::math::Vector3d scale = _meshSdf.Scale();
+  for (unsigned int s = 0; s < mesh->SubMeshCount(); ++s)
+  {
+    const auto subMesh = mesh->SubMeshByIndex(s).lock();
+    if (!subMesh || subMesh->SubMeshPrimitiveType() != gz::common::SubMesh::TRIANGLES)
+      continue;
+    if (!_meshSdf.Submesh().empty() && subMesh->Name() != _meshSdf.Submesh())
+      continue;
+    // <center_submesh>: the submesh's bounding-box centre moves to the origin.
+    gz::math::Vector3d offset = gz::math::Vector3d::Zero;
+    if (!_meshSdf.Submesh().empty() && _meshSdf.CenterSubmesh())
+      offset = -0.5 * (subMesh->Min() + subMesh->Max());
+
+    const unsigned int count = subMesh->IndexCount() > 0 ? subMesh->IndexCount() : subMesh->VertexCount();
+    for (unsigned int i = 0; i + 2 < count; i += 3)
+    {
+      std::array<unsigned int, 3> tri;
+      for (unsigned int k = 0; k < 3; ++k)
+      {
+        const unsigned int index =
+            subMesh->IndexCount() > 0 ? static_cast<unsigned int>(subMesh->Index(i + k)) : i + k;
+        tri[k] = weld((subMesh->Vertex(index) + offset) * scale);
+      }
+      if (tri[0] != tri[1] && tri[1] != tri[2] && tri[0] != tri[2])
+        shape->triangles.push_back(tri);
+    }
+  }
+
+  if (shape->triangles.empty())
+  {
+    _description = "has no triangles";
+    return nullptr;
+  }
+
+  shape->min = shape->max = shape->vertices.front();
+  for (const auto &v : shape->vertices)
+  {
+    shape->min.Min(v);
+    shape->max.Max(v);
+  }
+
+  // Closed and consistently oriented: each edge is used as often in each
+  // direction (an edge where two touching parts meet is used twice each way).
+  std::map<std::pair<unsigned int, unsigned int>, int> edgeBalance;
+  for (const auto &tri : shape->triangles)
+    for (int k = 0; k < 3; ++k)
+    {
+      const unsigned int a = tri[k];
+      const unsigned int b = tri[(k + 1) % 3];
+      edgeBalance[{std::min(a, b), std::max(a, b)}] += a < b ? 1 : -1;
+    }
+  bool closed = true;
+  for (const auto &[edge, balance] : edgeBalance)
+  {
+    if (balance != 0)
+    {
+      closed = false;
+      break;
+    }
+  }
+
+  // Outward-facing if the enclosed (signed) volume is positive.
+  double volume = 0.0;
+  for (const auto &tri : shape->triangles)
+    volume += shape->vertices[tri[0]].Dot(shape->vertices[tri[1]].Cross(shape->vertices[tri[2]])) / 6.0;
+  if (closed && volume < 0.0)
+  {
+    for (auto &tri : shape->triangles)
+      std::swap(tri[1], tri[2]);
+    volume = -volume;
+  }
+  shape->closed = closed && volume > 0.0;
+
+  std::ostringstream description;
+  description << shape->triangles.size() << " triangles, "
+              << (shape->closed ? "closed (exact intersection)"
+                                : "not closed (using its bounding box in the collision frame)");
+  _description = description.str();
+  return shape;
+}
+
+// Intervals of the segment inside a closed mesh, in the mesh's frame. Every
+// triangle the segment's line crosses is an entry (facing against the
+// segment) or an exit; walking them in order with a depth counter (the
+// winding number) gives where the segment is inside material: wherever the
+// depth isn't zero. Overlapping parts count once, and a cavity (an inward-
+// facing inner shell) brings the depth back to zero.
+void segmentMeshIntervals(const gz::math::Vector3d &_start, const gz::math::Vector3d &_segment,
+                          const custom::TriangleMesh &_mesh, Intervals &_intervals)
+{
+  // Quick rejection against the mesh's own bounding box.
+  constexpr double kPad = 1e-6;
+  double boxEnter = 0.0;
+  double boxExit = 0.0;
+  if (!segmentIntersectsBox(_start, _segment, _mesh.min - kPad, _mesh.max + kPad, boxEnter, boxExit))
+    return;
+
+  // Moller-Trumbore on the segment's whole line (t unbounded): an endpoint
+  // inside the mesh is then still bracketed by an entry and an exit.
+  constexpr double kDetEps = 1e-14;
+  constexpr double kBaryEps = 1e-9;
+  std::vector<std::pair<double, int>> hits;  // (t, +1 entry / -1 exit)
+  for (const auto &tri : _mesh.triangles)
+  {
+    const auto &v0 = _mesh.vertices[tri[0]];
+    const gz::math::Vector3d e1 = _mesh.vertices[tri[1]] - v0;
+    const gz::math::Vector3d e2 = _mesh.vertices[tri[2]] - v0;
+    const gz::math::Vector3d p = _segment.Cross(e2);
+    const double det = e1.Dot(p);
+    if (std::abs(det) < kDetEps)
+      continue;  // the line runs along the triangle's plane
+    const double invDet = 1.0 / det;
+    const gz::math::Vector3d s = _start - v0;
+    const double u = s.Dot(p) * invDet;
+    if (u < -kBaryEps || u > 1.0 + kBaryEps)
+      continue;
+    const gz::math::Vector3d q = s.Cross(e1);
+    const double v = _segment.Dot(q) * invDet;
+    if (v < -kBaryEps || u + v > 1.0 + kBaryEps)
+      continue;
+    const double t = e2.Dot(q) * invDet;
+    // det = -segment . (e1 x e2), with e1 x e2 the outward normal: the
+    // segment enters where it points against the normal.
+    hits.emplace_back(t, det > 0.0 ? 1 : -1);
+  }
+  if (hits.empty())
+    return;
+
+  // Entries before exits at the same t, so grazing an edge or a vertex opens
+  // and closes an empty interval instead of leaving the counter unbalanced.
+  std::sort(hits.begin(), hits.end(),
+            [](const auto &_a, const auto &_b)
+            { return _a.first < _b.first || (_a.first == _b.first && _a.second > _b.second); });
+
+  // A crossing through a shared edge or vertex is reported by each adjacent
+  // triangle: keep one per (t, direction).
+  constexpr double kSameT = 1e-9;
+  int depth = 0;
+  double tEnter = 0.0;
+  double lastT = -std::numeric_limits<double>::infinity();
+  int lastSign = 0;
+  for (const auto &[t, sign] : hits)
+  {
+    if (sign == lastSign && t - lastT < kSameT)
+      continue;
+    lastT = t;
+    lastSign = sign;
+    const int before = depth;
+    depth += sign;
+    if (before == 0)
+      tEnter = t;
+    else if (depth == 0)
+      addClippedInterval(_intervals, tEnter, t);
+  }
+}
+
 // Parametric intervals [tEnter, tExit] of the segment inside a link's
-// obstacle geometry. Box collisions are intersected exactly in their own
-// (possibly rotated) frame: the segment is transformed into the box frame
-// and slab-tested against +-size/2. If the link has any non-box collision,
-// the whole link falls back to its world axis-aligned bounding box, which
-// over-estimates rotated or non-box shapes. Returns false if the link has
-// neither (no collision geometry and no AABB).
+// obstacle geometry, each collision intersected exactly in its own (possibly
+// rotated) frame: boxes, spheres, ellipsoids, cylinders and capsules
+// analytically, and meshes triangle by triangle (closed meshes only; an open
+// one uses its bounding box in the collision frame). If the link has any
+// other shape (plane, heightmap, polyline, cone) or a mesh that can't be
+// loaded, the whole link falls back to its world axis-aligned bounding box,
+// which over-estimates. Returns false if there's nothing to intersect.
 bool segmentLinkIntervals(const gz::math::Vector3d &_start,
                           const gz::math::Vector3d &_segment,
                           const gz::sim::Entity &_linkEntity,
                           gz::sim::EntityComponentManager &_ecm,
-                          std::vector<std::pair<double, double>> &_intervals)
+                          custom::ObstacleGeometryCache &_cache,
+                          Intervals &_intervals)
 {
   const auto collisions =
       _ecm.ChildrenByComponents(_linkEntity, gz::sim::components::Collision());
 
-  std::vector<std::pair<double, double>> boxIntervals;
-  bool allBoxes = !collisions.empty();
+  Intervals shapeIntervals;
+  std::string unsupported = collisions.empty() ? "no collision" : "";
   for (const auto &collision : collisions)
   {
     const auto geometry = _ecm.Component<gz::sim::components::Geometry>(collision);
-    if (!geometry || geometry->Data().Type() != sdf::GeometryType::BOX ||
-        geometry->Data().BoxShape() == nullptr)
+    if (!geometry)
     {
-      allBoxes = false;
+      unsupported = "collision without geometry";
       break;
     }
+    const sdf::Geometry &geom = geometry->Data();
 
-    const gz::math::Pose3d boxPose = computeWorldPose(collision, _ecm);
-    const gz::math::Vector3d half = geometry->Data().BoxShape()->Size() * 0.5;
-    const gz::math::Vector3d localStart =
-        boxPose.Rot().RotateVectorReverse(_start - boxPose.Pos());
-    const gz::math::Vector3d localSegment = boxPose.Rot().RotateVectorReverse(_segment);
+    const gz::math::Pose3d pose = computeWorldPose(collision, _ecm);
+    const gz::math::Vector3d localStart = pose.Rot().RotateVectorReverse(_start - pose.Pos());
+    const gz::math::Vector3d localSegment = pose.Rot().RotateVectorReverse(_segment);
 
     double tEnter = 0.0;
     double tExit = 0.0;
-    if (segmentIntersectsBox(localStart, localSegment, -half, half, tEnter, tExit))
-      boxIntervals.emplace_back(tEnter, tExit);
+    if (geom.Type() == sdf::GeometryType::BOX && geom.BoxShape())
+    {
+      const gz::math::Vector3d half = geom.BoxShape()->Size() * 0.5;
+      if (segmentIntersectsBox(localStart, localSegment, -half, half, tEnter, tExit))
+        shapeIntervals.emplace_back(tEnter, tExit);
+    }
+    else if (geom.Type() == sdf::GeometryType::SPHERE && geom.SphereShape())
+    {
+      segmentSphereIntervals(localStart, localSegment, gz::math::Vector3d::Zero,
+                             geom.SphereShape()->Radius(), shapeIntervals);
+    }
+    else if (geom.Type() == sdf::GeometryType::ELLIPSOID && geom.EllipsoidShape())
+    {
+      segmentEllipsoidIntervals(localStart, localSegment, geom.EllipsoidShape()->Radii(), shapeIntervals);
+    }
+    else if (geom.Type() == sdf::GeometryType::CYLINDER && geom.CylinderShape())
+    {
+      segmentCylinderIntervals(localStart, localSegment, geom.CylinderShape()->Radius(),
+                               geom.CylinderShape()->Length(), shapeIntervals);
+    }
+    else if (geom.Type() == sdf::GeometryType::CAPSULE && geom.CapsuleShape())
+    {
+      segmentCapsuleIntervals(localStart, localSegment, geom.CapsuleShape()->Radius(),
+                              geom.CapsuleShape()->Length(), shapeIntervals);
+    }
+    else if (geom.Type() == sdf::GeometryType::MESH && geom.MeshShape())
+    {
+      auto it = _cache.meshes.find(collision);
+      if (it == _cache.meshes.end())
+      {
+        std::string description;
+        auto mesh = buildTriangleMesh(*geom.MeshShape(), description);
+        gzmsg << "[UWBGazeboSystem] Obstacle mesh '" << geom.MeshShape()->Uri() << "': "
+              << description << ".\n";
+        it = _cache.meshes.emplace(collision, std::move(mesh)).first;
+      }
+      if (!it->second)
+      {
+        unsupported = "mesh that could not be loaded";
+        break;
+      }
+      if (it->second->closed)
+        segmentMeshIntervals(localStart, localSegment, *it->second, shapeIntervals);
+      else if (segmentIntersectsBox(localStart, localSegment, it->second->min, it->second->max,
+                                    tEnter, tExit))
+        shapeIntervals.emplace_back(tEnter, tExit);
+    }
+    else
+    {
+      unsupported = "geometry type " + std::to_string(static_cast<int>(geom.Type()));
+      break;
+    }
   }
 
-  if (allBoxes)
+  if (unsupported.empty())
   {
-    _intervals.insert(_intervals.end(), boxIntervals.begin(), boxIntervals.end());
+    _intervals.insert(_intervals.end(), shapeIntervals.begin(), shapeIntervals.end());
     return true;
   }
 
@@ -788,12 +1165,24 @@ bool segmentLinkIntervals(const gz::math::Vector3d &_start,
   if (!worldBox.has_value() || !worldBox->Size().IsFinite())
     return false;
 
+  if (_cache.warnedFallback.insert(_linkEntity).second)
+  {
+    const auto linkName = _ecm.Component<gz::sim::components::Name>(_linkEntity);
+    const auto modelName =
+        _ecm.Component<gz::sim::components::Name>(_ecm.ParentEntity(_linkEntity));
+    gzwarn << "[UWBGazeboSystem] Obstacle link '" << (modelName ? modelName->Data() : "?")
+           << "::" << (linkName ? linkName->Data() : "?") << "' has a " << unsupported
+           << ": using the link's world axis-aligned bounding box, which over-estimates "
+           << "the blocked length.\n";
+  }
+
   double tEnter = 0.0;
   double tExit = 0.0;
   if (segmentIntersectsBox(_start, _segment, worldBox->Min(), worldBox->Max(), tEnter, tExit))
     _intervals.emplace_back(tEnter, tExit);
   return true;
 }
+}  // namespace
 
 // Sums the (start,end) parametric intervals in _intervals after merging any
 // that overlap, in units of the segment's own length (i.e. [0,1] fractions,
@@ -827,24 +1216,25 @@ double mergeAndSumIntervals(std::vector<std::pair<double, double>> _intervals)
   return total;
 }
 
-// Length of the tag-anchor segment that lies inside obstacle AABBs, split
+// Length of the tag-anchor segment that lies inside obstacles, split
 // into untagged obstacles (the generic material) and each tagged material,
 // each later multiplied by its attenuation rate. _materials is
 // optional (nullptr when the material model is disabled) and maps an
 // obstacle link to its material name, resolved once per PreUpdate call;
 // links missing from it count as untagged. Intervals are merged *within*
-// each group before summing, so overlapping AABBs of the same group (e.g. a
+// each group before summing, so overlapping obstacles of the same group (e.g. a
 // wall split into several collision links) aren't double-counted, while
 // different materials in series each contribute their own length. With
 // _materials null, every link is untagged, which reduces to exactly the
 // original single-thickness behaviour.
-BlockedPath computeAabbBlockedPath(const gz::math::Vector3d &_start,
+BlockedPath computeBlockedPath(const gz::math::Vector3d &_start,
                                    const gz::math::Vector3d &_end,
                                    const std::vector<gz::sim::Entity> &_allLinks,
                                    const gz::sim::Entity &_tagLinkEntity,
                                    const gz::sim::Entity &_anchorLinkEntity,
                                    const double _endpointMarginM,
                                    gz::sim::EntityComponentManager &_ecm,
+                                   custom::ObstacleGeometryCache &_cache,
                                    const std::unordered_map<gz::sim::Entity, std::string> *_materials = nullptr)
 {
   BlockedPath path;
@@ -868,7 +1258,7 @@ BlockedPath computeAabbBlockedPath(const gz::math::Vector3d &_start,
       continue;
 
     std::vector<std::pair<double, double>> linkIntervals;
-    if (!segmentLinkIntervals(_start, segment, linkEntity, _ecm, linkIntervals))
+    if (!segmentLinkIntervals(_start, segment, linkEntity, _ecm, _cache, linkIntervals))
       continue;
 
     std::string materialName;
@@ -1153,11 +1543,11 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 		link.moving = sensorMoving.at(_tagEntity) || sensorMoving.at(_anchorEntity);
 
 		const BlockedPath wallPath =
-			computeAabbBlockedPath(_tagPos, _anchorPos, obstacleLinks, _tagEntity, _anchorEntity,
-			                       this->nlosEndpointMarginM_, ecm, obstacleMaterialsPtr);
+			computeBlockedPath(_tagPos, _anchorPos, obstacleLinks, _tagEntity, _anchorEntity,
+			                   this->nlosEndpointMarginM_, ecm, *this->geometryCache_, obstacleMaterialsPtr);
 		const BlockedPath bodyPath =
-			computeAabbBlockedPath(_tagPos, _anchorPos, bodyShadowLinks, _tagEntity, _anchorEntity,
-			                       this->nlosEndpointMarginM_, ecm);
+			computeBlockedPath(_tagPos, _anchorPos, bodyShadowLinks, _tagEntity, _anchorEntity,
+			                   this->nlosEndpointMarginM_, ecm, *this->geometryCache_);
 
 		link.wallThicknessM = wallPath.untaggedM;
 		link.bodyShadowThicknessM = bodyPath.untaggedM;
