@@ -187,9 +187,14 @@ private:
   // suffix), including "generic". Built in Configure() from the .cpp's
   // material table at carrierFrequencyGhz_, each entry overridable through
   // scalar "material_<name>_attenuation_db_per_m" / "material_<name>_permittivity"
-  // SDF parameters. Obstacles tagged with a name not in here count as
-  // generic (warned once per name).
+  // SDF parameters, plus any custom materials defined through
+  // "material_<name>_loss_tangent" + "_permittivity" (rate follows the
+  // carrier frequency) or "material_<name>_attenuation_db_per_m" (fixed
+  // rate). Obstacles tagged with a name not in here count as generic
+  // (warned once per name).
   std::unordered_map<std::string, MaterialProperties> materials_;
+  // Names in materials_ that are user-defined, not from the built-in table.
+  std::unordered_set<std::string> customMaterials_;
   std::unordered_set<std::string> warnedUnknownMaterials_;
 };
 }

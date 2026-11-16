@@ -26,6 +26,7 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 - [Sim-to-real gap](#sim-to-real-gap)
 - [Parameter reference](#parameter-reference)
 - [Material table](#material-table)
+- [Custom materials](#custom-materials)
 - [References](#references)
 
 ## Ranging modes and topics
@@ -49,7 +50,7 @@ Parameters are introduced below as `code` next to the symbol they set; all of th
 
 For a tag at $`\mathbf{p}_t`$ and an anchor at $`\mathbf{a}`$, the true range is $`d = \lVert \mathbf{p}_t - \mathbf{a} \rVert`$. The segment between them, minus `nlos_endpoint_margin_m` at each end (to ignore the vehicles' own mounts), is intersected with every obstacle -- every world model except `ground_plane` and the UWB-carrying vehicles: exactly with box collisions (in each box's own, possibly rotated, frame), and through the link's world-axis-aligned bounding box (AABB) for any other shape. Chord lengths are merged per material, so overlapping links of one wall aren't counted twice:
 
-- $`\ell_m`$ -- chord length through obstacles of material $`m`$. Untagged obstacles are the `generic` material. With `enable_material_attenuation: true`, an obstacle's material comes from a `<uwb:material>` element inside one of its `<collision>`s or its `<model>`, or else from a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`. The most specific one wins: collision, link name, model, then model name. `<uwb:material>` is a custom SDF element, so declare its prefix on the root, `<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">` (SDF's own `<material>` only describes appearance). Names are case-insensitive. The known materials are in the [Material table](#material-table), and an unknown name logs a warning once and counts as `generic`.
+- $`\ell_m`$ -- chord length through obstacles of material $`m`$. Untagged obstacles are the `generic` material. With `enable_material_attenuation: true`, an obstacle's material comes from a `<uwb:material>` element inside one of its `<collision>`s or its `<model>`, or else from a `__material_<name>` suffix on its link or model name, e.g. `wall_1__material_concrete`. The most specific one wins: collision, link name, model, then model name. `<uwb:material>` is a custom SDF element, so declare its prefix on the root, `<sdf version="1.9" xmlns:uwb="https://github.com/amartinezsilva/UWBPX4Sim">` (SDF's own `<material>` only describes appearance). Names are case-insensitive. The built-in materials are in the [Material table](#material-table). You can add your own, see [Custom materials](#custom-materials). Any other name logs a warning once and counts as `generic`.
 - $`\ell_{\text{body}}`$ -- chord length through the vehicles' `base_link`s.
 
 ### Link budget
@@ -378,8 +379,9 @@ What to keep in mind when moving from the simulator to real hardware. The number
 | **Materials** | | |
 | `enable_material_attenuation` | material tags on/off | `false` |
 | `carrier_frequency_ghz` | $`f`$ (DW1000 channel 2) | `4.0` |
-| `material_<name>_attenuation_db_per_m` | $`\alpha_m`$ override (any material but `metal`) | from $`f`$, see [Material table](#material-table) |
-| `material_<name>_permittivity` | $`\varepsilon_{r,m}`$ override (any material but `metal`) | see [Material table](#material-table) |
+| `material_<name>_attenuation_db_per_m` | $`\alpha_m`$, **fixed** (doesn't follow $`f`$): override for a built-in, or a [custom material](#custom-materials)'s rate | from $`f`$, see [Material table](#material-table) |
+| `material_<name>_permittivity` | $`\varepsilon_{r,m}`$ override (any material but `metal`) | see [Material table](#material-table); `1.0` for a custom material |
+| `material_<name>_loss_tangent` | $`\tan\delta_m`$, [custom materials](#custom-materials) only: $`\alpha_m`$ is computed from $`f`$ | -- |
 | `material_metal_detour_loss_db` | $`L_{\text{metal}}`$ | `20.0` |
 | `enable_dielectric_delay` | dielectric-delay term on/off | `false` |
 | **Persistent bias** | | |
@@ -388,7 +390,7 @@ What to keep in mind when moving from the simulator to real hardware. The number
 | `power_bias_cm_per_db`, `power_bias_ref_loss_db` | $`k_P`$, $`L_P`$ | `0.0`, `0.0` |
 | `random_seed` | noise/bias seed; `0` = fixed default seed | `0` |
 
-The per-material overrides aren't shown in the setup GUI (saving from it would freeze the frequency-derived rates); add them to a preset by hand.
+The per-material overrides and custom materials aren't shown in the setup GUI (saving from it would freeze the frequency-derived rates); add them to a preset by hand.
 
 ## Material table
 
@@ -417,6 +419,47 @@ The plastic, cardboard and foam loss tangents and the 20 dB metal detour loss ar
 | generic 1.0 m, 3.7 m | 31.0 | 42.4 | Blackout | -- | 1 |
 
 With `enable_nlos_dropout: false`, as in `lps_tdoa`, $`\sigma`$ is as shown, but $`p`$ follows distance alone, so an obstacle never causes a blackout.
+
+## Custom materials
+
+You can define materials that aren't in the [Material table](#material-table). **No data backs them:** the simulation is only as good as the values you give, and the plugin logs each one as uncalibrated at startup.
+
+Add the parameters to a preset (or the plugin's SDF block), tag obstacles with the name as for any material (`<uwb:material>brick</uwb:material>` or `wall__material_brick`), and set `enable_material_attenuation: true`. Names must be lowercase and can't reuse a built-in name.
+
+There are two ways to give a custom material's attenuation rate. **They differ in what happens when `carrier_frequency_ghz` changes**, so pick one:
+
+| | Option A: loss tangent (recommended) | Option B: fixed rate |
+| --- | --- | --- |
+| Parameters | `material_<name>_loss_tangent` **and** `material_<name>_permittivity`, both required | `material_<name>_attenuation_db_per_m`; `material_<name>_permittivity` optional (default `1.0`) |
+| What you give | Physical constants $`\tan\delta`$ and $`\varepsilon_r`$, as found in datasheets and the literature | $`\alpha`$ in dB/m **at your carrier frequency** |
+| Rate used | $`\alpha = 90.96\, f\, \sqrt{\varepsilon_r}\, \tan\delta`$, recomputed from `carrier_frequency_ghz`, as for the built-in plastic, cardboard and foam | Exactly the number you give |
+| If you change `carrier_frequency_ghz` | The rate follows it, like every built-in | **The rate stays the same.** It's now wrong for the new frequency unless you update it |
+| Use it when | You know (or can look up) the material's dielectric properties | You measured or found the loss at one frequency, and you won't change that frequency |
+
+```yaml
+enable_material_attenuation: true
+carrier_frequency_ghz: 4.0
+
+# Option A: rate computed from f -- 14.6 dB/m at 4 GHz, 23.6 dB/m at 6.5 GHz.
+material_brick_permittivity: 4.0
+material_brick_loss_tangent: 0.02
+
+# Option B: 60 dB/m whatever carrier_frequency_ghz is.
+material_panel_attenuation_db_per_m: 60.0
+material_panel_permittivity: 3.0   # optional; only used with enable_dielectric_delay
+```
+
+(Illustrative values, not measurements.)
+
+Things to know:
+
+- **Don't mix them for one material.** If both `_attenuation_db_per_m` and `_loss_tangent` are set, the fixed rate wins and the plugin warns that the loss tangent is ignored.
+- **Option A assumes $`\tan\delta`$ doesn't change with frequency**, so the rate grows linearly with $`f`$. That's a fair approximation across the UWB band, but it's still an approximation.
+- **The permittivity has two roles in Option A:** it enters the rate, and with `enable_dielectric_delay: true` it also sets the excess delay $`\ell\, (\sqrt{\varepsilon_r} - 1)`$. In Option B it only sets the delay, so leaving it at `1.0` means no delay.
+- A custom material behaves like a dielectric: the signal goes through it and loses $`\alpha \ell`$. There is no custom equivalent of `metal`'s detour.
+- `_loss_tangent` is for custom materials only. To change a built-in material, override its rate with `material_<name>_attenuation_db_per_m`, which is fixed in the same way as Option B.
+- A custom material with neither a loss tangent nor a fixed rate (for instance, only `_permittivity`) is ignored with a warning, and obstacles tagged with it count as `generic`.
+- Check the startup log for a line like `Custom material 'brick' (uncalibrated): 14.552 dB/m (from loss tangent 0.02 at 4 GHz)` or `... (fixed rate, does NOT follow carrier_frequency_ghz)`. It tells you which option the plugin used.
 
 ## References
 

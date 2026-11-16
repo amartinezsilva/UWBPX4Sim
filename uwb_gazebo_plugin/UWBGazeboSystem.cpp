@@ -527,10 +527,22 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
   // Material table at the (validated) carrier frequency, then per-material
   // overrides: scalar "material_<name>_attenuation_db_per_m" /
   // "material_<name>_permittivity" parameters (neither for the conductor).
-  // Add a material to materialModels() (and to gui/app.py's PARAM_GROUPS)
-  // if a world needs one not listed.
   this->materials_.clear();
   this->warnedUnknownMaterials_.clear();
+  auto clampMaterial = [](const std::string &_prefix, MaterialProperties &_props)
+  {
+    if (_props.attenuationDbPerM < 0.0)
+    {
+      gzwarn << "[UWBGazeboSystem] " << _prefix << "_attenuation_db_per_m < 0.0. Clamping to 0.0.\n";
+      _props.attenuationDbPerM = 0.0;
+    }
+    if (_props.permittivity < 1.0)
+    {
+      gzwarn << "[UWBGazeboSystem] " << _prefix
+             << "_permittivity < 1.0 (faster than light). Clamping to 1.0.\n";
+      _props.permittivity = 1.0;
+    }
+  };
   for (const auto &[materialName, model] : materialModels())
   {
     auto props = materialAt(model, this->carrierFrequencyGhz_);
@@ -541,21 +553,112 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
         props.attenuationDbPerM = _sdf->Get<double>(prefix + "_attenuation_db_per_m");
       if (_sdf && _sdf->HasElement(prefix + "_permittivity"))
         props.permittivity = _sdf->Get<double>(prefix + "_permittivity");
+      clampMaterial(prefix, props);
+    }
+    this->materials_[materialName] = props;
+  }
 
+  // Custom (user-defined, uncalibrated) materials: any other <name> in a
+  // "material_<name>_{loss_tangent,attenuation_db_per_m,permittivity}"
+  // parameter. Two ways to give the attenuation rate:
+  //   - loss tangent + permittivity: rate = 90.96 f sqrt(eps_r) tan(delta),
+  //     recomputed from carrier_frequency_ghz like the built-in plastic,
+  //     cardboard and foam;
+  //   - attenuation_db_per_m: a fixed rate, valid only at the frequency the
+  //     user chose it for. It does NOT follow carrier_frequency_ghz, and it
+  //     wins if both are given.
+  // permittivity is optional with a fixed rate (1.0: no excess delay).
+  this->customMaterials_.clear();
+  std::vector<std::string> customNames;
+  {
+    static const std::string kPrefix = "material_";
+    static const std::vector<std::string> kSuffixes = {
+        "_attenuation_db_per_m", "_loss_tangent", "_permittivity"};
+    std::unordered_set<std::string> seen;
+    for (auto child = _sdf ? _sdf->GetFirstElement() : nullptr; child; child = child->GetNextElement())
+    {
+      const std::string key = child->GetName();
+      if (key.rfind(kPrefix, 0) != 0)
+        continue;
+      for (const auto &suffix : kSuffixes)
+      {
+        if (key.size() <= kPrefix.size() + suffix.size() ||
+            key.compare(key.size() - suffix.size(), suffix.size(), suffix) != 0)
+          continue;
+        const std::string name =
+            key.substr(kPrefix.size(), key.size() - kPrefix.size() - suffix.size());
+        if (name == kConductorMaterial)
+          gzwarn << "[UWBGazeboSystem] " << key << " is ignored: metal isn't penetrated, "
+                 << "set material_metal_detour_loss_db instead.\n";
+        else if (materialModels().count(name))
+        {
+          if (suffix == "_loss_tangent")
+            gzwarn << "[UWBGazeboSystem] " << key << " is ignored: loss tangents are for custom "
+                   << "materials only. Override a built-in's rate with material_" << name
+                   << "_attenuation_db_per_m.\n";
+        }
+        else if (name != toLower(name))
+          gzwarn << "[UWBGazeboSystem] " << key << " is ignored: custom material names must be "
+                 << "lowercase (obstacle tags are matched in lowercase).\n";
+        else if (seen.insert(name).second)
+          customNames.push_back(name);
+        break;
+      }
+    }
+  }
+  for (const auto &name : customNames)
+  {
+    const std::string prefix = "material_" + name;
+    const bool hasRate = _sdf->HasElement(prefix + "_attenuation_db_per_m");
+    const bool hasTanDelta = _sdf->HasElement(prefix + "_loss_tangent");
+    const bool hasPermittivity = _sdf->HasElement(prefix + "_permittivity");
+
+    MaterialProperties props{0.0, hasPermittivity ? _sdf->Get<double>(prefix + "_permittivity") : 1.0};
+    clampMaterial(prefix, props);
+    std::ostringstream how;
+    if (hasRate)
+    {
+      props.attenuationDbPerM = _sdf->Get<double>(prefix + "_attenuation_db_per_m");
       if (props.attenuationDbPerM < 0.0)
       {
         gzwarn << "[UWBGazeboSystem] " << prefix << "_attenuation_db_per_m < 0.0. Clamping to 0.0.\n";
         props.attenuationDbPerM = 0.0;
       }
-      if (props.permittivity < 1.0)
-      {
-        gzwarn << "[UWBGazeboSystem] " << prefix
-               << "_permittivity < 1.0 (faster than light). Clamping to 1.0.\n";
-        props.permittivity = 1.0;
-      }
+      how << "fixed rate, does NOT follow carrier_frequency_ghz";
+      if (hasTanDelta)
+        gzwarn << "[UWBGazeboSystem] Custom material '" << name << "' has both " << prefix
+               << "_attenuation_db_per_m and " << prefix << "_loss_tangent. Using the fixed rate "
+               << "and ignoring the loss tangent.\n";
     }
-    this->materials_[materialName] = props;
+    else if (hasTanDelta && hasPermittivity)
+    {
+      double tanDelta = _sdf->Get<double>(prefix + "_loss_tangent");
+      if (tanDelta < 0.0)
+      {
+        gzwarn << "[UWBGazeboSystem] " << prefix << "_loss_tangent < 0.0. Clamping to 0.0.\n";
+        tanDelta = 0.0;
+      }
+      props.attenuationDbPerM =
+          90.96 * this->carrierFrequencyGhz_ * std::sqrt(props.permittivity) * tanDelta;
+      how << "from loss tangent " << tanDelta << " at " << this->carrierFrequencyGhz_ << " GHz";
+    }
+    else
+    {
+      gzwarn << "[UWBGazeboSystem] Custom material '" << name << "' is ignored (obstacles tagged "
+             << "with it count as generic): it needs either " << prefix << "_loss_tangent and "
+             << prefix << "_permittivity, or " << prefix << "_attenuation_db_per_m.\n";
+      continue;
+    }
+
+    this->materials_[name] = props;
+    this->customMaterials_.insert(name);
+    gzmsg << "[UWBGazeboSystem] Custom material '" << name << "' (uncalibrated): "
+          << props.attenuationDbPerM << " dB/m (" << how.str() << "), eps_r=" << props.permittivity
+          << ".\n";
   }
+  if (!this->customMaterials_.empty() && !this->enableMaterialAttenuation_)
+    gzwarn << "[UWBGazeboSystem] Custom materials are defined but enable_material_attenuation is "
+           << "false: every obstacle counts as generic.\n";
 
   this->biasCmDist_ =
       std::uniform_real_distribution<double>(this->biasMinCm_, this->biasMaxCm_);
@@ -574,6 +677,8 @@ void UWBGazeboSystem::Configure(const gz::sim::Entity &,
     {
       const auto &props = this->materials_.at(names[i]);
       materialSummary << (i ? ", " : "") << names[i];
+      if (this->customMaterials_.count(names[i]))
+        materialSummary << "(custom)";
       if (names[i] == kConductorMaterial)
         materialSummary << ":{detour_loss_db=" << this->metalDetourLossDb_ << "}";
       else
@@ -1050,7 +1155,10 @@ void UWBGazeboSystem::PreUpdate(const gz::sim::UpdateInfo &info,
 				{
 					gzwarn << "[UWBGazeboSystem] Unknown obstacle material '" << materialName
 					       << "' (known: " << knownMaterialList(this->materials_)
-					       << "). Treating it as generic.\n";
+					       << "). Treating it as generic. To define it, set material_" << materialName
+					       << "_loss_tangent and material_" << materialName
+					       << "_permittivity, or material_" << materialName
+					       << "_attenuation_db_per_m (see docs/measurement_model.md#custom-materials).\n";
 				}
 				continue;
 			}

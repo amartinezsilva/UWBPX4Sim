@@ -159,7 +159,9 @@ def create_app(uwb_root: Path, selection_file: Path, progress_log: Path | None =
     # material_<name>_attenuation_db_per_m / _permittivity overrides are
     # deliberately not listed: every listed key is written into a saved
     # preset, which would freeze the rates the plugin otherwise derives from
-    # carrier_frequency_ghz. Add them to a preset by hand when needed.
+    # carrier_frequency_ghz. Add them to a preset by hand when needed; the
+    # same goes for custom materials (material_<name>_loss_tangent etc., see
+    # docs/measurement_model.md#custom-materials).
     PARAM_GROUPS: list[tuple[str, list[tuple[str, Any]]]] = [
         ("Ranging mode and topics.", [
             ("uwb_mode", "twr"),
