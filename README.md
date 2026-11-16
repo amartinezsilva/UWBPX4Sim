@@ -12,7 +12,8 @@ A ready-to-use Ultra-Wideband simulator for relative localization of multi-robot
 
 ## Features
 
-- **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance and by the obstacles in the way, including their material. See [Measurement model](docs/measurement_model.md).
+- **UWB measurement plugin** for Gazebo: two-way ranging (TWR) or time difference of arrival (TDOA), with noise, dropout and bias driven by distance. See [Measurement model](docs/measurement_model.md).
+- **LOS and NLOS links**: obstacles between a tag and an anchor are detected from the world geometry, and the loss through them puts each link in line of sight (LOS) or one of three non-line-of-sight (NLOS) regimes: soft NLOS (biased), hard NLOS (noisier, optionally with more dropouts) or blackout (no measurement). Obstacles can be tagged with a material (concrete, plasterboard, wood, glass, plastic, cardboard, foam or metal), each with its own attenuation; see the [Material table](docs/measurement_model.md#material-table).
 - **Calibrated presets**, one per system and mode: `eliko_twr` (Eliko, TWR), `lps_tdoa` (Bitcraze Loco Positioning, TDOA) and `lps_twr` (Bitcraze Loco Positioning, TWR). Tune one and save your own from the setup GUI.
 - **Multi-robot layouts** from one YAML file: UAVs and UGVs carrying any mix of tags and anchors, plus anchors fixed in the world. Vehicle models and the ROS 2 bridge are generated from it.
 - **Guided setup** with a browser GUI, a one-command **launcher**, and **RViz** showing the robots, transceivers and live UWB links for any layout.
