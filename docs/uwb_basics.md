@@ -39,25 +39,25 @@ The tag and an anchor exchange messages and measure the **round trip**, so their
 
 Each exchange gives **one distance per anchor-tag pair**. The two clocks run at slightly different rates, which adds an error during the reply time (see [Single-sided and double-sided TWR](#single-sided-and-double-sided-twr)). The tag actively ranges with each anchor in turn, so adding tags adds load: in Bitcraze's Loco Positioning System, TWR positions only one tag at a time [5].
 
-Eliko's systems use a variant called **active-passive TWR (AP-TWR)** [15]. According to Eliko, it adds passive anchors and handovers between anchors, so any number of anchors can take part in ranging. Unlike standard TWR, adding anchors doesn't reduce the number of tags or their update rate, and it still needs no anchor synchronisation, which Eliko says keeps it more robust than TDoA. Eliko also describes its precision as better than standard TWR and TDoA, but publishes no figures for that.
-
 #### Single-sided and double-sided TWR
 
 **Single-sided TWR (SS-TWR)** is the two-message exchange of Figure 1 (left). The tag times the round trip on its own clock, the anchor times its reply on its own clock, and the difference is twice the time of flight. But each device counts time with its own crystal, and two crystals never run at exactly the same rate: they typically differ by a few parts per million (ppm) [11]. The reply is long compared with the flight, about a millisecond against tens of nanoseconds, so a tiny rate difference over the reply becomes a large range error: half the drift times the reply time, times $`c`$. For example, 10 ppm over a 1 ms reply is 1.5 m (Figure 2, left) [11].
 
-**Double-sided TWR (DS-TWR)** adds a third message (Figure 1, right). Now each side measures one round trip and one reply on its own clock. Combining the four intervals with the asymmetric formula of Neirynck et al. [19] cancels the drift without needing the two replies to be equal. What remains is about the drift times the time of flight, under 0.01 cm. The cost is a third message for every range: more airtime and more energy.
+**Double-sided TWR (DS-TWR)** adds a third message (Figure 1, right). Now each side measures one round trip and one reply on its own clock. Combining the four intervals with the asymmetric formula of Neirynck et al. [12] cancels the drift without needing the two replies to be equal. What remains is about the drift times the time of flight, under 0.01 cm. The cost is a third message for every range: more airtime and more energy.
 
-Figure 2 (right) shows this on real data: a DW1000 tag ranging to four anchors at 2 m, all standing still [20]. The firmware's reply time varies between exchanges (0.6-1.7 ms), and the SS-TWR range moves with it along a straight line set by each anchor's drift, from -10.9 to +10.2 ppm, up to 2.9 m off. DS-TWR, computed from the same exchanges, stays put.
+Figure 2 (right) shows this on real data: a DW1000 tag ranging to four anchors at 2 m, all standing still [13]. The firmware's reply time varies between exchanges (0.6-1.7 ms), and the SS-TWR range moves with it along a straight line set by each anchor's drift, from -10.9 to +10.2 ppm, up to 2.9 m off. DS-TWR, computed from the same exchanges, stays put.
 
 <img src="images/ss_ds_drift.png" alt="Left: SS-TWR range error grows linearly with clock drift and is larger for longer replies, while DS-TWR stays at zero. Right: measured DW1000 exchanges, SS-TWR minus DS-TWR range against reply time, on four straight lines matching each anchor's drift" width="100%">
 
-*Figure 2: Range error from clock drift, where the drift is the anchor's clock rate minus the tag's. SS-TWR's error is −drift × reply time × $`c`$ / 2; DS-TWR's is about drift × time of flight, under 0.01 cm. Left: SS-TWR at three reply times, and DS-TWR. Right: SS-TWR range minus DS-TWR range for each exchange of a DW1000 tag at 2 m from four anchors [20]; the lines are the SS-TWR formula with each anchor's measured drift.*
+*Figure 2: Range error from clock drift, where the drift is the anchor's clock rate minus the tag's. SS-TWR's error is −drift × reply time × $`c`$ / 2; DS-TWR's is about drift × time of flight, under 0.01 cm. Left: SS-TWR at three reply times, and DS-TWR. Right: SS-TWR range minus DS-TWR range for each exchange of a DW1000 tag at 2 m from four anchors [13]; the lines are the SS-TWR formula with each anchor's measured drift.*
 
 SS-TWR can still be accurate if the drift is measured some other way and corrected, for example from the timestamps of many exchanges when nothing moves. That is how the DW3000 ranges behind the simulator's `dw3000_twr` preset were recovered (see [Calibration](measurement_model.md#dw3000-twr-preset-dw3000_twr)). The simulator itself doesn't simulate the messages: it models the resulting range error, as measured on real hardware.
 
+Eliko's systems use a variant called **active-passive TWR (AP-TWR)** [14]. According to Eliko, it adds passive anchors and handovers between anchors, so any number of anchors can take part in ranging. Unlike standard TWR, adding anchors doesn't reduce the number of tags or their update rate, and it still needs no anchor synchronisation, which Eliko says keeps it more robust than TDoA. Eliko also describes its precision as better than standard TWR and TDoA, but publishes no figures for that.
+
 ### Time difference of arrival (TDoA)
 
-The anchors keep a common timebase, by synchronising [8] or by tracking each other's clock drift [12]. From arrival times at two nodes, the system gets a **difference of distances**, $`d_j - d_i`$, rather than a distance. Each difference places the tag on a hyperboloid [1], so locating it in 3D takes at least four anchors: three independent differences for three unknown coordinates.
+The anchors keep a common timebase, by synchronising [8] or by tracking each other's clock drift [15]. From arrival times at two nodes, the system gets a **difference of distances**, $`d_j - d_i`$, rather than a distance. Each difference places the tag on a hyperboloid [1], so locating it in 3D takes at least four anchors: three independent differences for three unknown coordinates.
 
 In downlink TDoA, for example, each anchor sends a packet whose transmit time on the common timebase is known, and the tag timestamps its arrival (Figure 3):
 
@@ -70,20 +70,20 @@ Each arrival time is the transmit time plus the time of flight, $`r = T + d/c`$,
 There are two variants:
 
 - **Downlink:** the anchors transmit and the tag only listens, as in the Loco Positioning System and the UTIL dataset [5], [9]. New tags add no load, so any number of tags can be used [5].
-- **Uplink:** the tag transmits short "blinks", and synchronised anchors timestamp them for a central location engine [13].
+- **Uplink:** the tag transmits short "blinks", and synchronised anchors timestamp them for a central location engine [16].
 
-Accuracy depends on the anchors' timing, and is best inside the volume the anchors surround [5], [12]. Differences that share a reference anchor share that anchor's error, so they're correlated.
+Accuracy depends on the anchors' timing, and is best inside the volume the anchors surround [5], [15]. Differences that share a reference anchor share that anchor's error, so they're correlated.
 
 ## Signals through obstacles
 
 When a wall or an object blocks the direct path (NLOS), the signal goes through it and loses power on the way. How much it loses depends on the material, how thick it is and the carrier frequency.
 
-**Attenuation rate.** Inside a material, the signal's power falls exponentially with distance, so its loss in decibels grows linearly with thickness: crossing $`\ell`$ metres costs $`\alpha \ell`$ dB, where $`\alpha`$ is the material's **attenuation rate** in dB/m [16]. Two properties of the material set it:
+**Attenuation rate.** Inside a material, the signal's power falls exponentially with distance, so its loss in decibels grows linearly with thickness: crossing $`\ell`$ metres costs $`\alpha \ell`$ dB, where $`\alpha`$ is the material's **attenuation rate** in dB/m [17]. Two properties of the material set it:
 
-- **Relative permittivity** $`\varepsilon_r`$: how strongly the material responds to the field. It also slows the wave to $`c/\sqrt{\varepsilon_r}`$ [16], [17].
-- **Loss tangent** $`\tan\delta`$: how much of the wave's energy the material turns into heat on each cycle. Some sources give the conductivity $`\sigma`$ instead, which is equivalent: $`\sigma = 2\pi f \varepsilon_0 \varepsilon_r \tan\delta`$ [16].
+- **Relative permittivity** $`\varepsilon_r`$: how strongly the material responds to the field. It also slows the wave to $`c/\sqrt{\varepsilon_r}`$ [17], [18].
+- **Loss tangent** $`\tan\delta`$: how much of the wave's energy the material turns into heat on each cycle. Some sources give the conductivity $`\sigma`$ instead, which is equivalent: $`\sigma = 2\pi f \varepsilon_0 \varepsilon_r \tan\delta`$ [17].
 
-For materials that let most of the signal through ($`\tan\delta < 0.5`$, which includes common building materials [16]), the rate is approximately [16], [17]
+For materials that let most of the signal through ($`\tan\delta < 0.5`$, which includes common building materials [17]), the rate is approximately [17], [18]
 
 ```math
 \alpha \approx 91\, f\, \sqrt{\varepsilon_r}\, \tan\delta \ \text{dB/m}, \qquad f \text{ in GHz}.
@@ -91,13 +91,13 @@ For materials that let most of the signal through ($`\tan\delta < 0.5`$, which i
 
 The loss tangent has by far the stronger effect: $`\alpha`$ is proportional to it, but only to the square root of $`\varepsilon_r`$.
 
-**Carrier frequency.** The frequency appears in the formula directly: with a constant loss tangent, $`\alpha`$ grows in proportion to $`f`$. Real materials aren't quite that simple. ITU-R P.2040 models the conductivity of concrete, plasterboard, wood and glass as $`\sigma = c f^{d}`$, with $`d`$ between about 0.8 and 1.3 depending on the material, so their rates grow roughly as $`f^{d}`$ [16]. Either way, higher channels lose more. The DW1000 offers, among others, channel 2 at about 4 GHz and channel 5 at about 6.5 GHz [18]. Moving from channel 2 to channel 5 raises the rate of the simulator's built-in materials by a factor of 1.5 to 1.9 (Figure 4). A 20 cm concrete wall, for example, costs about 20 dB on channel 2 and about 29 dB on channel 5. 20 dB is as much as moving from 1 m to 10 m away in free space, where power falls with the square of distance.
+**Carrier frequency.** The frequency appears in the formula directly: with a constant loss tangent, $`\alpha`$ grows in proportion to $`f`$. Real materials aren't quite that simple. ITU-R P.2040 models the conductivity of concrete, plasterboard, wood and glass as $`\sigma = c f^{d}`$, with $`d`$ between about 0.8 and 1.3 depending on the material, so their rates grow roughly as $`f^{d}`$ [17]. Either way, higher channels lose more. The DW1000 offers, among others, channel 2 at about 4 GHz and channel 5 at about 6.5 GHz [19]. Moving from channel 2 to channel 5 raises the rate of the simulator's built-in materials by a factor of 1.5 to 1.9 (Figure 4). A 20 cm concrete wall, for example, costs about 20 dB on channel 2 and about 29 dB on channel 5. 20 dB is as much as moving from 1 m to 10 m away in free space, where power falls with the square of distance.
 
 <img src="images/material_attenuation.png" alt="Attenuation rate in dB/m against carrier frequency from 3 to 8 GHz for the simulator's built-in materials, concrete highest and foam lowest, all rising with frequency" width="70%">
 
-*Figure 4: Attenuation rate of the simulator's built-in materials against carrier frequency, on a logarithmic scale. Solid lines follow ITU-R P.2040-3's conductivity model [16], dashed lines a constant loss tangent.*
+*Figure 4: Attenuation rate of the simulator's built-in materials against carrier frequency, on a logarithmic scale. Solid lines follow ITU-R P.2040-3's conductivity model [17], dashed lines a constant loss tangent.*
 
-**Metal** is a conductor, not a dielectric: the field dies out within micrometres. For a conductivity of $`10^7`$ S/m, ITU-R P.2040's conductor formula gives about 3.5 dB per micrometre at 4 GHz [16]. Practically nothing goes through, so whatever signal arrives has gone around the obstacle or reflected off other surfaces.
+**Metal** is a conductor, not a dielectric: the field dies out within micrometres. For a conductivity of $`10^7`$ S/m, ITU-R P.2040's conductor formula gives about 3.5 dB per micrometre at 4 GHz [17]. Practically nothing goes through, so whatever signal arrives has gone around the obstacle or reflected off other surfaces.
 
 In the simulator, obstacles are tagged with a material, and the loss through them sets the noise, dropouts and bias of the link. See the [Material table](measurement_model.md#material-table) for the built-in materials, [Custom materials](measurement_model.md#custom-materials) to add your own from $`\varepsilon_r`$ and $`\tan\delta`$, and the [link budget](measurement_model.md#link-budget) for how metal is handled.
 
@@ -105,7 +105,7 @@ In the simulator, obstacles are tagged with a material, and the loss through the
 
 **Fixed anchors, tags on robots.** Anchors are mounted at known, surveyed positions [8], [9], and robots carry tags. This gives **absolute** positions in the anchor frame, and works best inside the space the anchors surround [5]. The area has to be equipped beforehand.
 
-**Anchors and tags on robots.** Several UWB nodes are carried on each robot, for example anchors on a ground vehicle and tags on a drone, which gives **relative** positions between robots with no infrastructure [8]. The anchors can only be as far apart as the robot is large, which limits accuracy [8], so the ranges are usually combined with other sensors such as odometry [14].
+**Anchors and tags on robots.** Several UWB nodes are carried on each robot, for example anchors on a ground vehicle and tags on a drone, which gives **relative** positions between robots with no infrastructure [8]. The anchors can only be as far apart as the robot is large, which limits accuracy [8], so the ranges are usually combined with other sensors such as odometry [20].
 
 The simulator supports both, and mixes of them: any robot can carry tags, anchors or both, and anchors can also be fixed in the world (see [Layout files](advanced_setup.md#layout-files)).
 
@@ -122,12 +122,12 @@ The simulator supports both, and mixes of them: any robot can carry tags, anchor
 9. W. Zhao, A. Goudar, X. Qiao, A. P. Schoellig, "UTIL: An Ultra-wideband Time-difference-of-arrival Indoor Localization Dataset", *IJRR*, 2024. https://arxiv.org/abs/2203.14471
 10. M. A. Shalaby, C. C. Cossette, J. R. Forbes, J. Le Ny, "Calibration and Uncertainty Characterization for Ultra-Wideband Two-Way-Ranging Measurements", ICRA 2023 (antenna-delay calibration). https://arxiv.org/abs/2210.05888
 11. Decawave, *APS011 Application Note: Sources of Error in DW1000 Based Two-Way Ranging (TWR) Schemes* (two-way ranging with clock drift; double-sided TWR). https://www.qorvo.com/products/d/da008446
-12. Bitcraze, *TDoA principles*, lps-node-firmware documentation. https://www.bitcraze.io/documentation/repository/lps-node-firmware/master/functional-areas/tdoa_principles/
-13. A. Acton, V. Kulkarni (ARIN Technologies), "Scalable, Low-Cost Indoor Localization System using TDoA and UWB", Microsoft Indoor Localization Competition. https://www.microsoft.com/en-us/research/wp-content/uploads/2016/11/ARINTech_Acton.pdf
-14. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", *IEEE ICRA*, 2026, pp. 17557–17564. https://doi.org/10.1109/ICRA57385.2026.11696767
-15. Eliko, *UWB RTLS: Ultra-Wideband Real-Time Location System* (comparison of AP-TWR, TWR and TDoA; vendor claims). https://eliko.tech/uwb-rtls-ultra-wideband-real-time-location-system/
-16. ITU-R Recommendation P.2040-3, *Effects of building materials and structures on radiowave propagation above about 100 MHz*, 2023. Section 2 (attenuation rate of dielectrics and conductors, conductivity and loss tangent) and Table 3 (material coefficients). https://www.itu.int/rec/R-REC-P.2040/en
-17. D. M. Pozar, *Microwave Engineering*, 4th ed., Wiley, 2012. Chapter 1 (plane waves in lossy media, low-loss dielectrics).
-18. IEEE Std 802.15.4-2020, *IEEE Standard for Low-Rate Wireless Networks*, HRP UWB PHY channel plan (channel 2: 3993.6 MHz; channel 5: 6489.6 MHz).
-19. D. Neirynck, E. Luk, M. McLaughlin, "An alternative double-sided two-way ranging method", *13th Workshop on Positioning, Navigation and Communications (WPNC)*, 2016. https://doi.org/10.1109/WPNC.2016.7822844
-20. J. C. Santamaria-Pedrón, R. Berkvens, C. Reaño, J. J. Pérez-Solano, J. Torres-Sospedra, "Reproducible package for 'Performance evaluation of UWB in indoor environments: CIR and coverage analysis'", Zenodo, 2026 (calibration_anchors, DW1000). https://doi.org/10.5281/zenodo.21099647
+12. D. Neirynck, E. Luk, M. McLaughlin, "An alternative double-sided two-way ranging method", *13th Workshop on Positioning, Navigation and Communications (WPNC)*, 2016. https://doi.org/10.1109/WPNC.2016.7822844
+13. J. C. Santamaria-Pedrón, R. Berkvens, C. Reaño, J. J. Pérez-Solano, J. Torres-Sospedra, "Reproducible package for 'Performance evaluation of UWB in indoor environments: CIR and coverage analysis'", Zenodo, 2026 (calibration_anchors, DW1000). https://doi.org/10.5281/zenodo.21099647
+14. Eliko, *UWB RTLS: Ultra-Wideband Real-Time Location System* (comparison of AP-TWR, TWR and TDoA; vendor claims). https://eliko.tech/uwb-rtls-ultra-wideband-real-time-location-system/
+15. Bitcraze, *TDoA principles*, lps-node-firmware documentation. https://www.bitcraze.io/documentation/repository/lps-node-firmware/master/functional-areas/tdoa_principles/
+16. A. Acton, V. Kulkarni (ARIN Technologies), "Scalable, Low-Cost Indoor Localization System using TDoA and UWB", Microsoft Indoor Localization Competition. https://www.microsoft.com/en-us/research/wp-content/uploads/2016/11/ARINTech_Acton.pdf
+17. ITU-R Recommendation P.2040-3, *Effects of building materials and structures on radiowave propagation above about 100 MHz*, 2023. Section 2 (attenuation rate of dielectrics and conductors, conductivity and loss tangent) and Table 3 (material coefficients). https://www.itu.int/rec/R-REC-P.2040/en
+18. D. M. Pozar, *Microwave Engineering*, 4th ed., Wiley, 2012. Chapter 1 (plane waves in lossy media, low-loss dielectrics).
+19. IEEE Std 802.15.4-2020, *IEEE Standard for Low-Rate Wireless Networks*, HRP UWB PHY channel plan (channel 2: 3993.6 MHz; channel 5: 6489.6 MHz).
+20. A. Martínez-Silva, D. Alejo, L. Merino, F. Caballero, "Radio-based Multi-Robot Odometry and Relative Localization", *IEEE ICRA*, 2026, pp. 17557–17564. https://doi.org/10.1109/ICRA57385.2026.11696767
