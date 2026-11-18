@@ -30,9 +30,12 @@ Two kinds of node take part, and the same hardware can usually play either role 
 
 The tag and an anchor exchange messages and measure the **round trip**, so their clocks don't need to be synchronised [8] (Figure 1):
 
-<img src="images/twr_timing.svg" alt="TWR timing: the tag sends a poll, the anchor replies after a known delay, and the round trip gives the distance" width="100%">
+<p align="center">
+  <img src="images/twr_timing.svg" alt="TWR timing: the tag sends a poll, the anchor replies after a known delay, and the round trip gives the distance" width="49%">
+  <img src="images/ds_twr_timing.svg" alt="DS-TWR timing: the tag sends a poll, the anchor responds, the tag sends a final message; each side measures one round trip and one reply" width="49%">
+</p>
 
-*Figure 1: Two-way ranging. Time runs left to right; each arrow is a message, and its slope is the time of flight.*
+*Figure 1: Two-way ranging. Left: single-sided (SS-TWR), two messages. Right: double-sided (DS-TWR), three messages: the tag measures round 1 and its reply, the anchor its reply and round 2, each on its own clock. Time runs left to right; each arrow is a message, and its slope is the time of flight.*
 
 Each exchange gives **one distance per anchor-tag pair**. The two clocks run at slightly different rates, which adds an error during the reply time (see [Single-sided and double-sided TWR](#single-sided-and-double-sided-twr)). The tag actively ranges with each anchor in turn, so adding tags adds load: in Bitcraze's Loco Positioning System, TWR positions only one tag at a time [5].
 
@@ -40,19 +43,15 @@ Eliko's systems use a variant called **active-passive TWR (AP-TWR)** [15]. Accor
 
 #### Single-sided and double-sided TWR
 
-**Single-sided TWR (SS-TWR)** is the two-message exchange of Figure 1. The tag times the round trip on its own clock, the anchor times its reply on its own clock, and the difference is twice the time of flight. But each device counts time with its own crystal, and two crystals never run at exactly the same rate: they typically differ by a few parts per million (ppm) [11]. The reply is long compared with the flight, about a millisecond against tens of nanoseconds, so a tiny rate difference over the reply becomes a large range error: half the drift times the reply time, times $`c`$. For example, 10 ppm over a 1 ms reply is 1.5 m (Figure 3, left) [11].
+**Single-sided TWR (SS-TWR)** is the two-message exchange of Figure 1 (left). The tag times the round trip on its own clock, the anchor times its reply on its own clock, and the difference is twice the time of flight. But each device counts time with its own crystal, and two crystals never run at exactly the same rate: they typically differ by a few parts per million (ppm) [11]. The reply is long compared with the flight, about a millisecond against tens of nanoseconds, so a tiny rate difference over the reply becomes a large range error: half the drift times the reply time, times $`c`$. For example, 10 ppm over a 1 ms reply is 1.5 m (Figure 2, left) [11].
 
-**Double-sided TWR (DS-TWR)** adds a third message (Figure 2). Now each side measures one round trip and one reply on its own clock. Combining the four intervals with the asymmetric formula of Neirynck et al. [19] cancels the drift without needing the two replies to be equal. What remains is about the drift times the time of flight, under 0.01 cm. The cost is a third message for every range: more airtime and more energy.
+**Double-sided TWR (DS-TWR)** adds a third message (Figure 1, right). Now each side measures one round trip and one reply on its own clock. Combining the four intervals with the asymmetric formula of Neirynck et al. [19] cancels the drift without needing the two replies to be equal. What remains is about the drift times the time of flight, under 0.01 cm. The cost is a third message for every range: more airtime and more energy.
 
-<img src="images/ds_twr_timing.svg" alt="DS-TWR timing: the tag sends a poll, the anchor responds, the tag sends a final message; each side measures one round trip and one reply" width="100%">
-
-*Figure 2: Double-sided two-way ranging, drawn like Figure 1. The tag measures round 1 and its reply, the anchor measures its reply and round 2, each on its own clock.*
-
-Figure 3 (right) shows this on real data: a DW1000 tag ranging to four anchors at 2 m, all standing still [20]. The firmware's reply time varies between exchanges (0.6-1.7 ms), and the SS-TWR range moves with it along a straight line set by each anchor's drift, from -10.9 to +10.2 ppm, up to 2.9 m off. DS-TWR, computed from the same exchanges, stays put.
+Figure 2 (right) shows this on real data: a DW1000 tag ranging to four anchors at 2 m, all standing still [20]. The firmware's reply time varies between exchanges (0.6-1.7 ms), and the SS-TWR range moves with it along a straight line set by each anchor's drift, from -10.9 to +10.2 ppm, up to 2.9 m off. DS-TWR, computed from the same exchanges, stays put.
 
 <img src="images/ss_ds_drift.png" alt="Left: SS-TWR range error grows linearly with clock drift and is larger for longer replies, while DS-TWR stays at zero. Right: measured DW1000 exchanges, SS-TWR minus DS-TWR range against reply time, on four straight lines matching each anchor's drift" width="100%">
 
-*Figure 3: Range error from clock drift. Left: SS-TWR at three reply times, and DS-TWR. Right: SS-TWR range minus DS-TWR range for each exchange of a DW1000 tag at 2 m from four anchors [20]; the lines are the formula with each anchor's measured drift.*
+*Figure 2: Range error from clock drift, where the drift is the anchor's clock rate minus the tag's. SS-TWR's error is −drift × reply time × $`c`$ / 2; DS-TWR's is about drift × time of flight, under 0.01 cm. Left: SS-TWR at three reply times, and DS-TWR. Right: SS-TWR range minus DS-TWR range for each exchange of a DW1000 tag at 2 m from four anchors [20]; the lines are the SS-TWR formula with each anchor's measured drift.*
 
 SS-TWR can still be accurate if the drift is measured some other way and corrected, for example from the timestamps of many exchanges when nothing moves. That is how the DW3000 ranges behind the simulator's `dw3000_twr` preset were recovered (see [Calibration](measurement_model.md#dw3000-twr-preset-dw3000_twr)). The simulator itself doesn't simulate the messages: it models the resulting range error, as measured on real hardware.
 
@@ -60,11 +59,11 @@ SS-TWR can still be accurate if the drift is measured some other way and correct
 
 The anchors keep a common timebase, by synchronising [8] or by tracking each other's clock drift [12]. From arrival times at two nodes, the system gets a **difference of distances**, $`d_j - d_i`$, rather than a distance. Each difference places the tag on a hyperboloid [1], so locating it in 3D takes at least four anchors: three independent differences for three unknown coordinates.
 
-In downlink TDoA, for example, each anchor sends a packet whose transmit time on the common timebase is known, and the tag timestamps its arrival (Figure 4):
+In downlink TDoA, for example, each anchor sends a packet whose transmit time on the common timebase is known, and the tag timestamps its arrival (Figure 3):
 
 <img src="images/tdoa_timing.svg" alt="Downlink TDoA timing: two anchors send packets with their send times, and the tag records when each arrives" width="100%">
 
-*Figure 4: Downlink TDoA, drawn like Figure 1. The tag only listens.*
+*Figure 3: Downlink TDoA, drawn like Figure 1. The tag only listens.*
 
 Each arrival time is the transmit time plus the time of flight, $`r = T + d/c`$, so subtracting the two cancels the tag's own clock offset and leaves the difference of distances. Figure 3 of the UTIL paper [9] shows the full packet timing between a tag and two anchors, each with its own clock.
 
@@ -92,11 +91,11 @@ For materials that let most of the signal through ($`\tan\delta < 0.5`$, which i
 
 The loss tangent has by far the stronger effect: $`\alpha`$ is proportional to it, but only to the square root of $`\varepsilon_r`$.
 
-**Carrier frequency.** The frequency appears in the formula directly: with a constant loss tangent, $`\alpha`$ grows in proportion to $`f`$. Real materials aren't quite that simple. ITU-R P.2040 models the conductivity of concrete, plasterboard, wood and glass as $`\sigma = c f^{d}`$, with $`d`$ between about 0.8 and 1.3 depending on the material, so their rates grow roughly as $`f^{d}`$ [16]. Either way, higher channels lose more. The DW1000 offers, among others, channel 2 at about 4 GHz and channel 5 at about 6.5 GHz [18]. Moving from channel 2 to channel 5 raises the rate of the simulator's built-in materials by a factor of 1.5 to 1.9 (Figure 5). A 20 cm concrete wall, for example, costs about 20 dB on channel 2 and about 29 dB on channel 5. 20 dB is as much as moving from 1 m to 10 m away in free space, where power falls with the square of distance.
+**Carrier frequency.** The frequency appears in the formula directly: with a constant loss tangent, $`\alpha`$ grows in proportion to $`f`$. Real materials aren't quite that simple. ITU-R P.2040 models the conductivity of concrete, plasterboard, wood and glass as $`\sigma = c f^{d}`$, with $`d`$ between about 0.8 and 1.3 depending on the material, so their rates grow roughly as $`f^{d}`$ [16]. Either way, higher channels lose more. The DW1000 offers, among others, channel 2 at about 4 GHz and channel 5 at about 6.5 GHz [18]. Moving from channel 2 to channel 5 raises the rate of the simulator's built-in materials by a factor of 1.5 to 1.9 (Figure 4). A 20 cm concrete wall, for example, costs about 20 dB on channel 2 and about 29 dB on channel 5. 20 dB is as much as moving from 1 m to 10 m away in free space, where power falls with the square of distance.
 
 <img src="images/material_attenuation.png" alt="Attenuation rate in dB/m against carrier frequency from 3 to 8 GHz for the simulator's built-in materials, concrete highest and foam lowest, all rising with frequency" width="70%">
 
-*Figure 5: Attenuation rate of the simulator's built-in materials against carrier frequency, on a logarithmic scale. Solid lines follow ITU-R P.2040-3's conductivity model [16], dashed lines a constant loss tangent.*
+*Figure 4: Attenuation rate of the simulator's built-in materials against carrier frequency, on a logarithmic scale. Solid lines follow ITU-R P.2040-3's conductivity model [16], dashed lines a constant loss tangent.*
 
 **Metal** is a conductor, not a dielectric: the field dies out within micrometres. For a conductivity of $`10^7`$ S/m, ITU-R P.2040's conductor formula gives about 3.5 dB per micrometre at 4 GHz [16]. Practically nothing goes through, so whatever signal arrives has gone around the obstacle or reflected off other surfaces.
 
